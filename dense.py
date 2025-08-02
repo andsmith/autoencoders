@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from mnist import MNISTData
 import logging
 import tensorflow as tf
-from tensorflow.keras.layers import Dense, Input,Flatten, Reshape
+from tensorflow.keras.layers import Dense, Input, Flatten, Reshape
 from tensorflow.keras.models import Model
 from img_util import diff_img, make_img, make_digit_mosaic
 import os
@@ -12,8 +12,10 @@ from matplotlib.gridspec import GridSpec
 
 
 class DenseExperiment(object):
+    _DEFAULT_ACT_FNS = {'internal': 'relu',
+                        'encoding': 'relu'}
 
-    def __init__(self, enc_layers=(64,), n_epochs=25):
+    def __init__(self, enc_layers=(64,), n_epochs=25, act_fns=None):
         """
         Initialize the Dense Experiment with a specified number of encoding units.
         :param enc_layers: list of layer sizes, final value is the encoding layer size.
@@ -22,54 +24,59 @@ class DenseExperiment(object):
         self._n_epochs = n_epochs
         self.enc_layer_desc = enc_layers
         self.code_size = enc_layers[-1]
-        self.encode_act_fn = 'relu'
-        self.decode_act_fn = 'sigmoid'
+        self.act_fns = self._DEFAULT_ACT_FNS if act_fns is None else act_fns
+
+        if 'output' not in self.act_fns:
+            # to resemble pixel values in [0, 1], probably don't change.
+            self.act_fns['output'] = 'sigmoid'
 
         self._d_in = 784  # number of pixels in MNIST images
 
         self._load_data()
-        self._init_model()   
+        self._init_model()
         logging.info("Experiment initialized:  %s" % self.get_name())
 
-    def _load_data(self):
+    def _load_data(self, binarize=False):
         self.mnist_data = MNISTData()
         self.x_train = self.mnist_data.x_train.reshape(-1, self._d_in)
         self.x_test = self.mnist_data.x_test.reshape(-1, self._d_in)
-        self.y_train = self.mnist_data.y_train
-        self.y_test = self.mnist_data.y_test
+        self.y_train = np.where(self.mnist_data.y_train)[1]
+        self.y_test = np.where(self.mnist_data.y_test)[1]
 
-    def _init_model_(self):
+        if binarize:
+            self.x_train = (self.x_train > 0.5).astype(np.float32)
+            self.x_test = (self.x_test > 0.5).astype(np.float32)
 
-        def build_encoder(input_shape, layer_sizes):
-            input_img = tf.keras.Input(shape=input_shape)
-            x = Flatten()(input_img)
-            for i, size in enumerate(layer_sizes):
-                x = Dense(size, activation='relu',name=f'encoder_l{i}')(x)
-            return Model(inputs=input_img, outputs=x, name="encoder")
+        logging.info("Data loaded: %i training samples, %i test samples", self.x_train.shape[0], self.x_test.shape[0])
 
-        def build_decoder(encoded_shape, layer_sizes):
-            encoded_input = tf.keras.Input(shape=(encoded_shape,))
-            x = encoded_input
-            for i, size in enumerate(reversed(layer_sizes[:-1])):
-                x = Dense(size, activation='relu',name=f'decoder_l{i}')(x)
-            x = Dense(self._d_in, activation='sigmoid')(x)
-            return Model(inputs=encoded_input, outputs=x, name="decoder")
+    def _init_encoder_layers(self, inputs):
 
-        def build_autoencoder(layer_sizes):
-            input_shape = (28 * 28, 1)
-            encoder = build_encoder(input_shape, layer_sizes)
-            decoder = build_decoder(layer_sizes[-1], layer_sizes)
+        encoder_layers = []
+        for i, n_units in enumerate(self.enc_layer_desc):
+            if i == 0:
+                layer_input = inputs
+            else:
+                layer_input = encoder_layers[-1]
 
-            input_img = Input(shape=input_shape)
-            encoded = encoder(input_img)
-            decoded = decoder(encoded)
+            act_fn = self.act_fns['internal'] if i < len(self.enc_layer_desc) - 1 else self.act_fns['encoding']
+            layer = Dense(n_units, activation=act_fn, name=f'encoder_l{i}')(layer_input)
+            encoder_layers.append(layer)
 
-            autoencoder = Model(inputs=input_img, outputs=decoded, name="autoencoder")
-            autoencoder.compile(optimizer='adam', loss='binary_crossentropy')
+        return encoder_layers
 
-            return autoencoder, encoder, decoder
-        
-        self.autoencoder, self.encoder, self.decoder = build_autoencoder(self.enc_layer_desc)
+    def _init_decoder_layers(self, encoding):
+        decoder_layers = []
+        decoder_layer_desc = list(reversed(self.enc_layer_desc[:-1]))  # skip the last encoding layer
+        decoder_layer_desc.append(self._d_in)  # add the input layer size for decoding
+        for i, n_units in enumerate(decoder_layer_desc):
+            if i == 0:
+                layer_input = encoding
+            else:
+                layer_input = decoder_layers[-1]
+            act_fn = self.act_fns['internal'] if i < len(decoder_layer_desc) - 1 else self.act_fns['output']
+            layer = Dense(n_units, activation=act_fn, name=f'decoder_l{i}')(layer_input)
+            decoder_layers.append(layer)
+        return decoder_layers
 
     def _init_model(self):
         """
@@ -77,29 +84,10 @@ class DenseExperiment(object):
         """
         logging.info("Initializing auto encoder with encoding_layers=%s", self.enc_layer_desc)
         inputs = Input(shape=(self._d_in,))
-
-        self.encoder_layers = []
-        for i, n_units in enumerate(self.enc_layer_desc):
-            if i == 0:
-                layer_input = inputs
-            else:
-                layer_input = self.encoder_layers[-1]
-            layer = Dense(n_units, activation=self.encode_act_fn, name=f'encoder_l{i}')(layer_input)
-            self.encoder_layers.append(layer)
-        encoding = self.encoder_layers[-1]
-        self.decoder_layers = []
-        decoder_layer_desc = list(reversed(self.enc_layer_desc[:-1]))  # skip the last encoding layer
-        decoder_layer_desc.append(self._d_in)  # add the input layer size for decoding
-        for i, n_units in enumerate(decoder_layer_desc):
-            if i == 0:
-                layer_input = encoding
-            else:
-                layer_input = self.decoder_layers[-1]
-            act_fn = self.encode_act_fn if i < len(decoder_layer_desc) - 1 else self.decode_act_fn
-            layer = Dense(n_units, activation=act_fn, name=f'decoder_l{i}')(layer_input)
-            self.decoder_layers.append(layer)
-        decoding = self.decoder_layers[-1]
-
+        self.encoding_layers = self._init_encoder_layers(inputs)
+        encoding = self.encoding_layers[-1]
+        self.decoding_layers = self._init_decoder_layers(encoding)
+        decoding = self.decoding_layers[-1]
         self.encoder = Model(inputs=inputs, outputs=encoding, name='encoder')
         self.autoencoder = Model(inputs=inputs, outputs=decoding, name='autoencoder')
         self.decoder = Model(inputs=encoding, outputs=decoding, name='decoder')
@@ -112,11 +100,13 @@ class DenseExperiment(object):
             return True
         return False
 
-    def encode_samples(self, samples):
+    def encode_samples(self, samples, binarize_thresh=None):
         if not self.is_trained():
             raise RuntimeError("Model is not trained. Please train the model before encoding samples.")
         samples = samples.reshape(-1, 784)
         encoded_samples = self.encoder.predict(samples)
+        if binarize_thresh is not None:
+            encoded_samples = (encoded_samples > binarize_thresh).astype(np.float32)
         return encoded_samples
 
     def decode_samples(self, encoded_samples, reshape=False):
@@ -125,13 +115,16 @@ class DenseExperiment(object):
         encoded_samples = encoded_samples.reshape(-1, self.code_size)
         decoded_samples = self.decoder.predict(encoded_samples)
         if reshape:
-            decoded_samples = decoded_samples.reshape(-1, 28, 28)
+            if encoded_samples.ndim == 1 or encoded_samples.shape[0] == 1:
+                decoded_samples = decoded_samples.reshape(28, 28)
+            else:
+                decoded_samples = decoded_samples.reshape(-1, 28, 28)
         return decoded_samples
 
     def get_name(self, file_ext=False):
         desc_str = "_".join([str(n) for n in self.enc_layer_desc])
-        fname = ("Dense(%s_encode=%s_decode=%s)_TrainEpochs=%i" %
-                    (desc_str, self.encode_act_fn, self.decode_act_fn, self._n_epochs))
+        fname = ("Dense(%s_encode=%s_internal=%s)_TrainEpochs=%i" %
+                 (desc_str, self.act_fns['encoding'], self.act_fns['internal'], self._n_epochs))
         if file_ext:
             fname += ".weights.h5"
         return fname
@@ -150,14 +143,18 @@ class DenseExperiment(object):
         else:
             raise FileNotFoundError(f"Model weights file {full_path} not found.")
 
-    def _train(self, plot_hist=True):
+    def _train(self):
 
         try:
             logging.info("Attempting to load pre-trained weights...")
             self._load_weights()
-            return
+            return True
         except FileNotFoundError:
             logging.info("No pre-trained weights found, starting fresh training.")
+        self.train_more()
+        return False
+
+    def train_more(self, plot_hist=True):
 
         self._history = self.autoencoder.fit(self.x_train, self.x_train,
                                              epochs=self._n_epochs, batch_size=512,
@@ -173,7 +170,6 @@ class DenseExperiment(object):
             err = np.sum((imageA.astype("float") - imageB.astype("float")) ** 2)
             err /= float(imageA.shape[0])
             return err
-
         self._encoded_test = self.encode_samples(self.x_test)
         self._decoded_test = self.decode_samples(self._encoded_test)
         self._both_test = self.autoencoder.predict(self.x_test)
@@ -184,7 +180,9 @@ class DenseExperiment(object):
         logging.info("\tMean squared error: %.4f (%.4f)", np.mean(self._mse_errors), np.std(self._mse_errors))
 
     def run_experiment(self):
-        self._train()
+        is_trained = self._train()
+        #if is_trained:
+        #    self.train_more()  # uncomment to train loaded weights more.
         self._eval()
 
     def _plot_history(self):
@@ -245,10 +243,10 @@ class DenseExperiment(object):
         title = "Autoencoder Model: %s" % (model_name, ) +\
             "\nData: n_train=%i, n_test = %i " % (self.x_train.shape[0], self.x_test.shape[0])
         if show_diffs:
-            title+="          RED: decoded pixel >= 10% too high," 
-        title +="\nResults: test MSE = %.4f (%.4f)" % (np.mean(self._mse_errors), np.std(self._mse_errors)) 
+            title += "          RED: decoded pixel >= 10% too high,"
+        title += "\nResults: test MSE = %.4f (%.4f)" % (np.mean(self._mse_errors), np.std(self._mse_errors))
         if show_diffs:
-            title+= "             BLUE: decoded pixel >= 10% too low."
+            title += "             BLUE: decoded pixel >= 10% too low."
 
         plt.suptitle(title, fontsize=14)
 
@@ -272,7 +270,7 @@ class DenseExperiment(object):
 
 
 def dense_demo():
-    de = DenseExperiment(enc_layers=(512,64,), n_epochs=25)
+    de = DenseExperiment(enc_layers=(64,), n_epochs=13)
     de.run_experiment()
     de.plot(show_diffs=False)
     de.plot(show_diffs=True)
