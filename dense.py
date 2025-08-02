@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from mnist import MNISTData
 import logging
 import tensorflow as tf
-from tensorflow.keras.layers import Dense, Input
+from tensorflow.keras.layers import Dense, Input,Flatten, Reshape
 from tensorflow.keras.models import Model
 from img_util import diff_img, make_img, make_digit_mosaic
 import os
@@ -11,26 +11,100 @@ import os
 from matplotlib.gridspec import GridSpec
 
 
-class DenseExperiment:
+class DenseExperiment(object):
 
-    def __init__(self, n_enc=64):
+    def __init__(self, enc_layers=(64,), n_epochs=25):
         """
         Initialize the Dense Experiment with a specified number of encoding units.
-        :param n_enc: Number of encoding units in the autoencoder.
+        :param enc_layers: list of layer sizes, final value is the encoding layer size.
+        :param n_epochs: Number of epochs to train the autoencoder.
         """
-        self.n_epoch = 25
-        self.n_enc = n_enc
+        self._n_epochs = n_epochs
+        self.enc_layer_desc = enc_layers
+        self.code_size = enc_layers[-1]
         self.encode_act_fn = 'relu'
         self.decode_act_fn = 'sigmoid'
 
-        self.mnist_data = MNISTData()
-        logging.info("Dense Experiment initialized with n_enc=%d", self.n_enc)
-
-        self.d = 784  # number of pixels in MNIST images
+        self._d_in = 784  # number of pixels in MNIST images
 
         self._load_data()
+        self._init_model()   
+        logging.info("Experiment initialized:  %s" % self.get_name())
 
-        self._init_model()
+    def _load_data(self):
+        self.mnist_data = MNISTData()
+        self.x_train = self.mnist_data.x_train.reshape(-1, self._d_in)
+        self.x_test = self.mnist_data.x_test.reshape(-1, self._d_in)
+        self.y_train = self.mnist_data.y_train
+        self.y_test = self.mnist_data.y_test
+
+    def _init_model_(self):
+
+        def build_encoder(input_shape, layer_sizes):
+            input_img = tf.keras.Input(shape=input_shape)
+            x = Flatten()(input_img)
+            for i, size in enumerate(layer_sizes):
+                x = Dense(size, activation='relu',name=f'encoder_l{i}')(x)
+            return Model(inputs=input_img, outputs=x, name="encoder")
+
+        def build_decoder(encoded_shape, layer_sizes):
+            encoded_input = tf.keras.Input(shape=(encoded_shape,))
+            x = encoded_input
+            for i, size in enumerate(reversed(layer_sizes[:-1])):
+                x = Dense(size, activation='relu',name=f'decoder_l{i}')(x)
+            x = Dense(self._d_in, activation='sigmoid')(x)
+            return Model(inputs=encoded_input, outputs=x, name="decoder")
+
+        def build_autoencoder(layer_sizes):
+            input_shape = (28 * 28, 1)
+            encoder = build_encoder(input_shape, layer_sizes)
+            decoder = build_decoder(layer_sizes[-1], layer_sizes)
+
+            input_img = Input(shape=input_shape)
+            encoded = encoder(input_img)
+            decoded = decoder(encoded)
+
+            autoencoder = Model(inputs=input_img, outputs=decoded, name="autoencoder")
+            autoencoder.compile(optimizer='adam', loss='binary_crossentropy')
+
+            return autoencoder, encoder, decoder
+        
+        self.autoencoder, self.encoder, self.decoder = build_autoencoder(self.enc_layer_desc)
+
+    def _init_model(self):
+        """
+        Initialize all the layers, keep references so internal states can be accessed later.
+        """
+        logging.info("Initializing auto encoder with encoding_layers=%s", self.enc_layer_desc)
+        inputs = Input(shape=(self._d_in,))
+
+        self.encoder_layers = []
+        for i, n_units in enumerate(self.enc_layer_desc):
+            if i == 0:
+                layer_input = inputs
+            else:
+                layer_input = self.encoder_layers[-1]
+            layer = Dense(n_units, activation=self.encode_act_fn, name=f'encoder_l{i}')(layer_input)
+            self.encoder_layers.append(layer)
+        encoding = self.encoder_layers[-1]
+        self.decoder_layers = []
+        decoder_layer_desc = list(reversed(self.enc_layer_desc[:-1]))  # skip the last encoding layer
+        decoder_layer_desc.append(self._d_in)  # add the input layer size for decoding
+        for i, n_units in enumerate(decoder_layer_desc):
+            if i == 0:
+                layer_input = encoding
+            else:
+                layer_input = self.decoder_layers[-1]
+            act_fn = self.encode_act_fn if i < len(decoder_layer_desc) - 1 else self.decode_act_fn
+            layer = Dense(n_units, activation=act_fn, name=f'decoder_l{i}')(layer_input)
+            self.decoder_layers.append(layer)
+        decoding = self.decoder_layers[-1]
+
+        self.encoder = Model(inputs=inputs, outputs=encoding, name='encoder')
+        self.autoencoder = Model(inputs=inputs, outputs=decoding, name='autoencoder')
+        self.decoder = Model(inputs=encoding, outputs=decoding, name='decoder')
+        self.autoencoder.compile(optimizer='adam', loss='mean_squared_error')
+        logging.info("Autoencoder model initialized and compiled")
 
     def is_trained(self):
         # check model
@@ -38,37 +112,26 @@ class DenseExperiment:
             return True
         return False
 
-    def _init_model(self):
-        logging.info("Initializing model with n_enc=%d", self.n_enc)
-
-        inputs = Input(shape=(self.d,))
-        encoding = Dense(self.n_enc, activation=self.encode_act_fn)(inputs)
-        encoder = Model(inputs=inputs, outputs=encoding)
-
-        code_inputs = Input(shape=(self.n_enc,))
-        decoding = Dense(self.d, activation=self.decode_act_fn)(code_inputs)
-        decoder = Model(inputs=code_inputs, outputs=decoding)
-
-        self.autoencoder = Model(inputs=inputs, outputs=decoder(encoder(inputs)))
-        self.autoencoder.compile(optimizer='adam', loss='mean_squared_error')
-
-        logging.info("Model initialized and compiled")
-
     def encode_samples(self, samples):
         if not self.is_trained():
             raise RuntimeError("Model is not trained. Please train the model before encoding samples.")
         samples = samples.reshape(-1, 784)
-        encoded_samples = self.autoencoder.layers[1](samples)
-        return encoded_samples.numpy()
+        encoded_samples = self.encoder.predict(samples)
+        return encoded_samples
 
-    def decode_samples(self, encoded_samples):
+    def decode_samples(self, encoded_samples, reshape=False):
         if not self.is_trained():
             raise RuntimeError("Model is not trained. Please train the model before decoding samples.")
-        decoded_samples = self.autoencoder.layers[-1](encoded_samples)
-        return decoded_samples.numpy()
+        encoded_samples = encoded_samples.reshape(-1, self.code_size)
+        decoded_samples = self.decoder.predict(encoded_samples)
+        if reshape:
+            decoded_samples = decoded_samples.reshape(-1, 28, 28)
+        return decoded_samples
 
     def get_name(self, file_ext=False):
-        fname = ("Dense(%i-%s-%s)_TrainEpochs=%i" % (self.n_enc, self.encode_act_fn, self.decode_act_fn, self.n_epoch))
+        desc_str = "_".join([str(n) for n in self.enc_layer_desc])
+        fname = ("Dense(%s_encode=%s_decode=%s)_TrainEpochs=%i" %
+                    (desc_str, self.encode_act_fn, self.decode_act_fn, self._n_epochs))
         if file_ext:
             fname += ".weights.h5"
         return fname
@@ -87,13 +150,7 @@ class DenseExperiment:
         else:
             raise FileNotFoundError(f"Model weights file {full_path} not found.")
 
-    def _load_data(self):
-        self.x_train = self.mnist_data.x_train.reshape(-1, self.d)
-        self.x_test = self.mnist_data.x_test.reshape(-1, self.d)
-        self.y_train = self.mnist_data.y_train
-        self.y_test = self.mnist_data.y_test
-
-    def _train(self, plot_hist=False):
+    def _train(self, plot_hist=True):
 
         try:
             logging.info("Attempting to load pre-trained weights...")
@@ -103,7 +160,7 @@ class DenseExperiment:
             logging.info("No pre-trained weights found, starting fresh training.")
 
         self._history = self.autoencoder.fit(self.x_train, self.x_train,
-                                             epochs=self.n_epoch, batch_size=512,
+                                             epochs=self._n_epochs, batch_size=512,
                                              validation_data=(self.x_test, self.x_test))
         logging.info("Training completed")
         if plot_hist:
@@ -133,19 +190,23 @@ class DenseExperiment:
     def _plot_history(self):
         plt.plot(self._history.history['loss'])
         plt.plot(self._history.history['val_loss'])
-        plt.title('Model loss')
+        plt.title('Training history: model loss')
         plt.ylabel('Loss')
         plt.xlabel('Epoch')
         plt.legend(['Train', 'Test'], loc='upper right')
         plt.show()
 
-    def plot(self, n_samp=30):
+    def plot(self, n_samp=39, show_diffs=False):
 
-        def show_diff_mosaic(ax, inds, title):
-            diff_imgs = [diff_img(self.x_test[i], self._decoded_test[i]) for i in inds]
-            diff_image = make_digit_mosaic(diff_imgs, mosaic_aspect=3.0)
-            ax.imshow(diff_image)
-            ax.set_title(title, fontsize=14)
+        def show_mosaic(ax, inds, title, color):
+            if not show_diffs:
+                reconstructed_imgs = [make_img(self._decoded_test[i]) for i in inds]
+                image = make_digit_mosaic(reconstructed_imgs, mosaic_aspect=4.0)
+            else:
+                diff_imgs = [diff_img(self.x_test[i], self._decoded_test[i]) for i in inds]
+                image = make_digit_mosaic(diff_imgs, mosaic_aspect=4.0)
+            ax.imshow(image)
+            ax.set_title(title, fontsize=12, color=color)
             ax.axis('off')
 
         fig = plt.figure(constrained_layout=True, figsize=(10, 8))
@@ -160,51 +221,61 @@ class DenseExperiment:
                 ax = fig.add_subplot(gs[i, j])
                 q_axes.append(ax)
 
-        hist_axis = fig.add_subplot(gs[3, :])
+        hist_axis = fig.add_subplot(gs[n_q_rows, :])
 
         best_inds = self._order[:n_samp]
         worst_inds = self._order[-n_samp:]
         quantile_sample_indices = np.linspace(0, len(self._order)-1, n_quantiles, dtype=int)[1:-1]
         self._quant_inds = [best_inds]
         for ind in quantile_sample_indices:
-            self._quant_inds.append(self._order[ind-n_samp//2:ind+n_samp//2])
+            extra = n_samp % 2
+            self._quant_inds.append(self._order[ind-n_samp//2:ind+n_samp//2+extra])
         self._quant_inds.append(worst_inds)
 
-        q_labels = ['Best'] + ["Q%i" % i for i in range(1, n_quantiles-1)] + ['Worst']
+        suffix = "reconstructed img" if not show_diffs else "difference image"
+        mid_labels = ["sample group %i - %s" % (i, suffix) for i in range(1, n_quantiles-1)]
+        q_labels = ['Lowest Test MSE - %s' % suffix] + mid_labels + ['Highest Test MSE - %s' % suffix]
+        n_colors = len(q_labels)
+        cmap = plt.get_cmap('brg', n_colors)
+        colors = [cmap(i) for i in range(n_colors)]
         for i, (inds, label) in enumerate(zip(self._quant_inds, q_labels)):
-            show_diff_mosaic(q_axes[i], inds, label)
+            show_mosaic(q_axes[i], inds, label, color=colors[i])
 
         model_name = self.get_name()
-        title = "%s\nn_test = %i, MSE = %.4f (%.4f) " % (model_name, self._mse_errors.size,
-                                                         np.mean(self._mse_errors), np.std(self._mse_errors)) + \
-            "\nRED: decoded pixel >= 10% too high,\nBLUE: decoded pixel >= 10% too low"
+        title = "Autoencoder Model: %s" % (model_name, ) +\
+            "\nData: n_train=%i, n_test = %i " % (self.x_train.shape[0], self.x_test.shape[0])
+        if show_diffs:
+            title+="          RED: decoded pixel >= 10% too high," 
+        title +="\nResults: test MSE = %.4f (%.4f)" % (np.mean(self._mse_errors), np.std(self._mse_errors)) 
+        if show_diffs:
+            title+= "             BLUE: decoded pixel >= 10% too low."
 
         plt.suptitle(title, fontsize=14)
 
-        self._show_err_hist(hist_axis, q_labels)
+        self._show_err_hist(hist_axis, q_labels, colors)
 
-    def _show_err_hist(self, ax,labels):
-        ax.hist(self._mse_errors, bins=100, color='blue', alpha=0.8)
-        ax.set_title('MSE Error Histogram', fontsize=14)
-        ax.set_xlabel('MSE')
-        ax.set_ylabel('N')
+    def _show_err_hist(self, ax, labels, band_colors):
+        ax.hist(self._mse_errors, bins=100, color='gray', alpha=0.8)
+        ax.set_title('MSE distribution & sample group locations', fontsize=12)
 
         # Draw vertical bands for ranges of plot images
 
-        def draw_band(ax, band_index, label):
+        def draw_band(ax, band_index, color, label):
 
             err_range = np.min(self._mse_errors[self._quant_inds[band_index]]), np.max(
                 self._mse_errors[self._quant_inds[band_index]])
-            ax.axvspan(err_range[0], err_range[1], alpha=0.6, label=label)
+            ax.axvspan(err_range[0], err_range[1], color=color, alpha=0.6, label=label)
+
         for i, label in enumerate(labels):
-            draw_band(ax, i, label)
-        ax.legend(loc='upper center', fontsize=10)
+            draw_band(ax, i, band_colors[i], label)
+        # ax.legend(loc='upper center', fontsize=10)
 
 
 def dense_demo():
-    de = DenseExperiment(n_enc=64)
+    de = DenseExperiment(enc_layers=(512,64,), n_epochs=25)
     de.run_experiment()
-    de.plot()
+    de.plot(show_diffs=False)
+    de.plot(show_diffs=True)
     plt.show()
 
 
