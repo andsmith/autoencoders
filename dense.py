@@ -1,3 +1,4 @@
+from fileinput import filename
 import numpy as np
 import matplotlib.pyplot as plt
 from mnist import MNISTData
@@ -7,7 +8,7 @@ from tensorflow.keras.layers import Dense, Input, Flatten, Reshape
 from tensorflow.keras.models import Model
 from img_util import diff_img, make_img, make_digit_mosaic
 import os
-
+from argparse import ArgumentParser
 from matplotlib.gridspec import GridSpec
 
 
@@ -15,23 +16,30 @@ class DenseExperiment(object):
     _DEFAULT_ACT_FNS = {'internal': 'relu',
                         'encoding': 'relu'}
 
-    def __init__(self, enc_layers=(64,), n_epochs=25, act_fns=None):
+    def __init__(self, enc_layers=(64,), n_epochs=25, act_fns=None, save_figs=True):
         """
         Initialize the Dense Experiment with a specified number of encoding units.
         :param enc_layers: list of layer sizes, final value is the encoding layer size.
         :param n_epochs: Number of epochs to train the autoencoder.
+        :param act_fns: Dictionary of activation functions for internal, encoding, and output layers.
+                        If None, uses default activation functions.
+        :param save_figs: If True, saves plots to files instead of showing them interactively.
         """
         self._n_epochs = n_epochs
         self.enc_layer_desc = enc_layers
         self.code_size = enc_layers[-1]
         self.act_fns = self._DEFAULT_ACT_FNS if act_fns is None else act_fns
+        self._save_figs = save_figs
+
+        self._stage=0
+        self._epoch=0
 
         if 'output' not in self.act_fns:
             # to resemble pixel values in [0, 1], probably don't change.
             self.act_fns['output'] = 'sigmoid'
 
         self._d_in = 784  # number of pixels in MNIST images
-
+        self._history = None
         self._load_data()
         self._init_model()
         logging.info("Experiment initialized:  %s" % self.get_name())
@@ -143,26 +151,30 @@ class DenseExperiment(object):
         else:
             raise FileNotFoundError(f"Model weights file {full_path} not found.")
 
-    def _train(self):
-
+    def _attempt_resume(self):
         try:
             logging.info("Attempting to load pre-trained weights...")
             self._load_weights()
             return True
         except FileNotFoundError:
             logging.info("No pre-trained weights found, starting fresh training.")
-        self.train_more()
         return False
 
-    def train_more(self, plot_hist=True):
+    def train_more(self):
 
-        self._history = self.autoencoder.fit(self.x_train, self.x_train,
+        more_history = self.autoencoder.fit(self.x_train, self.x_train,
                                              epochs=self._n_epochs, batch_size=512,
                                              validation_data=(self.x_test, self.x_test))
-        logging.info("Training completed")
-        if plot_hist:
-            self._plot_history()
+        
+        if self._history is None:
+            self._history = more_history
+        else:
+            # merge histories
+            self._history.history['loss'].extend(more_history.history['loss'])
+            self._history.history['val_loss'].extend(more_history.history['val_loss'])
+
         self._save_weights()
+        self._eval()
 
     def _eval(self):
 
@@ -179,22 +191,24 @@ class DenseExperiment(object):
         logging.info("Evaluation completed on %i samples:", self._mse_errors.size)
         logging.info("\tMean squared error: %.4f (%.4f)", np.mean(self._mse_errors), np.std(self._mse_errors))
 
-    def run_experiment(self):
-        is_trained = self._train()
-        #if is_trained:
-        #    self.train_more()  # uncomment to train loaded weights more.
-        self._eval()
-
     def _plot_history(self):
-        plt.plot(self._history.history['loss'])
-        plt.plot(self._history.history['val_loss'])
-        plt.title('Training history: model loss')
-        plt.ylabel('Loss')
-        plt.xlabel('Epoch')
-        plt.legend(['Train', 'Test'], loc='upper right')
-        plt.show()
+        prefix = self.get_name(file_ext=False)
+        suffix = "stage_%i" % (self._stage+1)
+        filename = "%s_training_history_%s.png" % (prefix, suffix)
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(self._history.history['loss'])
+        ax.plot(self._history.history['val_loss'])
+        ax.set_title('Training history: model loss')
+        ax.set_ylabel('Loss')
+        ax.set_xlabel('Epoch')
+        ax.legend(['Train', 'Test'], loc='upper right')
+        self._maybe_save_fig(fig, filename)
+        return None
 
     def plot(self, n_samp=39, show_diffs=False):
+
+        prefix = self.get_name(file_ext=False)
+        suffix = "stage_%i" % (self._stage+1)
 
         def show_mosaic(ax, inds, title, color):
             if not show_diffs:
@@ -230,7 +244,6 @@ class DenseExperiment(object):
             self._quant_inds.append(self._order[ind-n_samp//2:ind+n_samp//2+extra])
         self._quant_inds.append(worst_inds)
 
-        suffix = "reconstructed img" if not show_diffs else "difference image"
         mid_labels = ["sample group %i - %s" % (i, suffix) for i in range(1, n_quantiles-1)]
         q_labels = ['Lowest Test MSE - %s' % suffix] + mid_labels + ['Highest Test MSE - %s' % suffix]
         n_colors = len(q_labels)
@@ -240,7 +253,7 @@ class DenseExperiment(object):
             show_mosaic(q_axes[i], inds, label, color=colors[i])
 
         model_name = self.get_name()
-        title = "Autoencoder Model: %s" % (model_name, ) +\
+        title = "Autoencoder Model: %s (stage %i)" % (model_name, self._stage + 1) +\
             "\nData: n_train=%i, n_test = %i " % (self.x_train.shape[0], self.x_test.shape[0])
         if show_diffs:
             title += "          RED: decoded pixel >= 10% too high,"
@@ -249,9 +262,20 @@ class DenseExperiment(object):
             title += "             BLUE: decoded pixel >= 10% too low."
 
         plt.suptitle(title, fontsize=14)
-
         self._show_err_hist(hist_axis, q_labels, colors)
+        filename = "%s_%s_%s.png" % (prefix, ("diffs" if show_diffs else "reconstructed"), suffix)
+        self._maybe_save_fig(fig, filename)
 
+    def _maybe_save_fig(self, fig,filename):
+        if self._save_figs:
+            fig.tight_layout()
+            fig.savefig(filename, bbox_inches='tight')
+            plt.close(fig)
+            return filename
+        #else:
+        #    plt.show()
+        #    return None
+        
     def _show_err_hist(self, ax, labels, band_colors):
         ax.hist(self._mse_errors, bins=100, color='gray', alpha=0.8)
         ax.set_title('MSE distribution & sample group locations', fontsize=12)
@@ -268,14 +292,50 @@ class DenseExperiment(object):
             draw_band(ax, i, band_colors[i], label)
         # ax.legend(loc='upper center', fontsize=10)
 
+    def run_staged_experiment(self, n_stages=10, plot_live=True):
+        """
+        Instead of training all at once, train for n_epochs, plot (save) the analysis,
+        continue training, for n_stages total stages.
+        """
+        # first round, load weights if available
+        self._attempt_resume()
+        
+        for stage in range(n_stages):
+            self._stage = stage
+            logging.info("Running stage %i of %i", stage + 1, n_stages)
+            stage_str = "%s_stage_%i" % ( stage + 1,) if not plot_live else None
+
+            self.train_more()
+            self._plot_history()
+            self.plot(show_diffs=False)
+            self.plot(show_diffs=True)
+            if plot_live:
+                plt.show()
+
+def _get_args():
+    """
+    Syntax:  python dense.py --layers 512 128 64 --epochs 25 --stages 10 --no_plot
+      this creates a dense autoencoder with encoding layers that have 512, 
+      128, and 64 units (code size 64), trained for 10 rounds of 25 epochs each.
+      The --no-plot option saves images instead of showing them.
+    """
+    parser = ArgumentParser(description="Run a dense autoencoder experiment.")
+    parser.add_argument('--layers', type=int, nargs='+', default=[64],
+                        help='List of encoding layer sizes (default: [64])')
+    parser.add_argument('--epochs', type=int, default=25,
+                        help='Number of epochs to train each stage (default: 25)')
+    parser.add_argument('--stages', type=int, default=5,
+                        help='Number of training stages (default: 5)')
+    parser.add_argument('--no_plot', action='store_true',
+                        help='If set, saves images instead of showing them interactively')
+    return parser.parse_args()
+
 
 def dense_demo():
-    de = DenseExperiment(enc_layers=(256, 64,), n_epochs=40)
-    de.run_experiment()
-    de.plot(show_diffs=False)
-    de.plot(show_diffs=True)
-    plt.show()
-
+    args = _get_args()
+    logging.info("Running Dense Autoencoder with args: %s", args)
+    de = DenseExperiment(enc_layers=args.layers, n_epochs=args.epochs, save_figs=args.no_plot)
+    de.run_staged_experiment(n_stages=args.stages)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
