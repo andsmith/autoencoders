@@ -270,7 +270,7 @@ class DenseExperiment(object):
 
 
 def dense_demo():
-    de = DenseExperiment(enc_layers=(64,), n_epochs=13)
+    de = DenseExperiment(enc_layers=(256, 64,), n_epochs=40)
     de.run_experiment()
     de.plot(show_diffs=False)
     de.plot(show_diffs=True)

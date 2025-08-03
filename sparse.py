@@ -3,12 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import logging
 from mnist import MNISTData
-from img_util import diff_img, make_img, make_digit_mosaic
-import os
+from img_util import make_img, make_digit_mosaic
 from matplotlib.gridspec import GridSpec
-from matplotlib.widgets import Slider
-from tensorflow.keras.layers import Dense, Input
-from tensorflow.keras.models import Model
 import seaborn as sns
 import tensorflow as tf
 
@@ -16,6 +12,7 @@ import tensorflow as tf
 @tf.custom_gradient
 def binary_step_with_straight_through_estimator(x):
     y = tf.cast(x > 0.0, tf.float32)
+
     def grad(dy):
         return dy
     return y, grad
@@ -61,7 +58,7 @@ class SparseExperiment(DenseExperiment):
         desc_str = "_".join([str(n) for n in self.enc_layer_desc])
         bin_str = "" if not self.act_fns['binarize_code'] else "_BIN"
         fname = ("Sparse(%s%s_encode=%s_internal=%s)_TrainEpochs=%i" %
-                 (desc_str,bin_str, func_to_str(self.act_fns['encoding']),
+                 (desc_str, bin_str, func_to_str(self.act_fns['encoding']),
                   func_to_str(self.act_fns['internal']), self._n_epochs))
         if file_ext:
             fname += ".weights.h5"
@@ -82,7 +79,7 @@ class SparseExperiment(DenseExperiment):
         else:
             raise ValueError("Unknown method for sparse loss: %s" % reg_method)
 
-        return mse_loss * (1-self.reg_lambda) +  binary_reg_term * self.reg_lambda
+        return mse_loss * (1-self.reg_lambda) + binary_reg_term * self.reg_lambda
 
     def plot_threshold_slider_app(self, n_disp_samples=33, n_stat_samples=1000):
         """
@@ -133,6 +130,7 @@ class SparseExperiment(DenseExperiment):
         self._plot_mse(mse_box_ax, x_stat, decoded_per_digit, thresh)
         self._plot_reconstructions(original_mosaic_ax, reconstructed_mosaic_ax, x_disp, thresh)
         plt.tight_layout()
+        return z_per_digit
 
     def _plot_reconstructions(self, original_ax, reconstructed_ax, x_disp, thresh):
         """
@@ -179,8 +177,8 @@ class SparseExperiment(DenseExperiment):
         sns.boxplot(data=digit_stats, ax=ax)
 
         # turn off x axis
-        #ax.xaxis.set_visible(False)
-        #ax.set_xlabel("Sparsity")
+        # ax.xaxis.set_visible(False)
+        # ax.set_xlabel("Sparsity")
 
     def _plot_mse(self, ax, truth_per_digit, decoded_per_digit, thresh):
         """
@@ -211,23 +209,53 @@ class SparseExperiment(DenseExperiment):
             samples[digit] = digit_samples
         return samples
 
-
     def run_experiment(self):
         pre_trained = self._train()
         if pre_trained:
             self.train_more()   # uncomment to train loaded weights more.
         self._eval()
 
+    def plot_code_samples(self, encoded_digits, n_per_row=100):
+        """
+        Make an image showing the encoded vectors as rows of pixels.
+        The image is as wide as the encoding layer.
+        The height is spanned by the 10 digits, each with n_per_row samples.
+        Sort the encoded bits by the number of active samples (over all digits), so
+        the most frequently used code bits are on the left.
+        """
+        # all samples for getting the order
+        code_arr = np.concatenate([encoded_digits[digit] for digit in range(10)], axis=0)
+        code_counts = np.sum(code_arr, axis=0)
+        code_order = np.argsort(code_counts)[::-1]
+        code_size = code_arr.shape[1]
+        # Sort the encoded bits by the number of active samples (over all digits), so
+        # the most frequently used code bits are on the left.
+        code_arr = np.concatenate([encoded_digits[digit][:n_per_row, code_order] for digit in range(10)[::-1]], axis=0)
+        img = code_arr
+
+        # Plot the image
+        plt.figure(figsize=(15, 8))
+        plt.imshow(img, aspect='auto', extent=(0,code_size, -.5, 9.5), cmap='gray', interpolation='nearest')
+        plt.title("Encoded Digits")
+        plt.xlabel("Code Bits")
+        plt.ylabel("Digit")
+
+        # make the y-axis show the digit numbers
+        plt.yticks(np.arange(10), np.arange(10))
+        plt.colorbar()
+        plt.show()
+
+
+
 def sparse_demo():
 
-    se = SparseExperiment(enc_layers=(512,128, 4096), n_epochs=30, reg_lambda=0.5)
+    se = SparseExperiment(enc_layers=(512, 128, 4096), n_epochs=300, reg_lambda=0.5)
     se.run_experiment()
     if True:
         se.plot(show_diffs=False)
         se.plot(show_diffs=True)
-    # se.plot_code_samples(n_samples=10)
-    # plt.show()
-    se.plot_threshold_slider_app()
+    encoded_per_digit = se.plot_threshold_slider_app()
+    se.plot_code_samples(encoded_per_digit)
     plt.show()
 
 
