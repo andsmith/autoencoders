@@ -292,7 +292,7 @@ class DenseExperiment(object):
             draw_band(ax, i, band_colors[i], label)
         # ax.legend(loc='upper center', fontsize=10)
 
-    def run_staged_experiment(self, n_stages=10, plot_live=True):
+    def run_staged_experiment(self, n_stages=10):
         """
         Instead of training all at once, train for n_epochs, plot (save) the analysis,
         continue training, for n_stages total stages.
@@ -303,13 +303,12 @@ class DenseExperiment(object):
         for stage in range(n_stages):
             self._stage = stage
             logging.info("Running stage %i of %i", stage + 1, n_stages)
-            stage_str = "%s_stage_%i" % ( stage + 1,) if not plot_live else None
 
             self.train_more()
             self._plot_history()
             self.plot(show_diffs=False)
             self.plot(show_diffs=True)
-            if plot_live:
+            if not self._save_figs:
                 plt.show()
 
 def _get_args():
