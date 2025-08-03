@@ -17,6 +17,7 @@ One constraint to prevent that copymachine is to create an "information bottlene
 This project creats a multilayered autoencoder to encode a 28x28 pixel grayscale image into a vector and to decode those vectors back into images.  The usual squared error loss function is minimized to find the weights:
 
 For sample vector $x$, let $E(x)=c$ be the encoding function computed by the "first half" of the network, the activation vector of the code layer when the network sees input vector $x$.  Let let $D(c) = x'$ be the decoding function, the "second half" of the network that transforms code vector $c$ back into the reconstructed image $x'$.  The loss function for training set $X$ is:
+
 $$
 L(X) = \sum_{x\in X} (x - D(E(x)))^2
 $$
@@ -55,9 +56,11 @@ To make the codes binary, the code layer units use the binary / Heaviside activa
 
 #### Sparse
 To encourage code sparsity, the loss function has a regularization term, the total number of active bits in the encoded input. 
+
 $$
 L(X) = \sum_{x\in X} (x - D(E(x)))^2  + \sum E(x)
 $$
+
 Also called the L1 norm.  (A parameter is implemented to control the relative importance of the two terms, but doesn't seem to matter in practice.)
 
 Run the script `> python sparse.py` to train a sparse binary autoencoder with an encoder with 512, 128, and 4096 units in its three layers, producing encodings of 4096 bits.  This plots the same figures as the dense autoencoder example and two additional plots:
