@@ -87,7 +87,7 @@ class SparseExperiment(DenseExperiment):
 
         desc_str = "_".join([str(n) for n in self.enc_layer_desc])
         bin_str = "_REAL" if not self.act_fns['binarize_code'] else "_BINARY"
-        fname = ("Sparse(%s%s_regL=%.1f)_TrainEpochs=%i" %
+        fname = ("Sparse(%s%s_regL=%.3f)_TrainEpochs=%i" %
                  (desc_str, bin_str, self.reg_lambda, self._n_epochs))
         if file_ext:
             fname += ".weights.h5"
@@ -155,8 +155,7 @@ class SparseExperiment(DenseExperiment):
         logging.info("\tMean squared error: %.4f (%.4f)", np.mean(self._mse_errors), np.std(self._mse_errors))
         logging.info("\tMSE term: %.4f", self._mse_term)
         logging.info("\tSparsity term: %.4f", self._sparse_term)
-        logging.info("\tMean loss (lambda=%.1f): %.4f (%.4f)", self.reg_lambda,
-                     np.mean(self._losses), np.std(self._losses))
+        logging.info("\tCombined loss (w/lambda=%.4f): %.4f ", self.reg_lambda, np.mean(self._losses))
 
     def plot_sparsity(self, n_disp_samples=33, n_stat_samples=1000):
         """
