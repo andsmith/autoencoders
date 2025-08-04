@@ -31,8 +31,8 @@ class DenseExperiment(object):
         self.act_fns = self._DEFAULT_ACT_FNS if act_fns is None else act_fns
         self._save_figs = save_figs
 
-        self._stage=0
-        self._epoch=0
+        self._stage = 0
+        self._epoch = 0
 
         if 'output' not in self.act_fns:
             # to resemble pixel values in [0, 1], probably don't change.
@@ -43,6 +43,9 @@ class DenseExperiment(object):
         self._load_data()
         self._init_model()
         logging.info("Experiment initialized:  %s" % self.get_name())
+
+    def _get_loss_fn(self):
+        return 'mean_squared_error'
 
     def _load_data(self, binarize=False):
         self.mnist_data = MNISTData()
@@ -99,7 +102,7 @@ class DenseExperiment(object):
         self.encoder = Model(inputs=inputs, outputs=encoding, name='encoder')
         self.autoencoder = Model(inputs=inputs, outputs=decoding, name='autoencoder')
         self.decoder = Model(inputs=encoding, outputs=decoding, name='decoder')
-        self.autoencoder.compile(optimizer='adam', loss='mean_squared_error')
+        self.autoencoder.compile(optimizer='adam', loss=self._get_loss_fn())
         logging.info("Autoencoder model initialized and compiled")
 
     def is_trained(self):
@@ -160,20 +163,21 @@ class DenseExperiment(object):
             logging.info("No pre-trained weights found, starting fresh training.")
         return False
 
-    def train_more(self):
+    def train_more(self, n_epochs=None, save_wts=True):
 
+        n_epochs = n_epochs if n_epochs is not None else self._n_epochs
         more_history = self.autoencoder.fit(self.x_train, self.x_train,
-                                             epochs=self._n_epochs, batch_size=512,
-                                             validation_data=(self.x_test, self.x_test))
-        
+                                            epochs=n_epochs, batch_size=512,
+                                            validation_data=(self.x_test, self.x_test))
+
         if self._history is None:
             self._history = more_history
         else:
             # merge histories
             self._history.history['loss'].extend(more_history.history['loss'])
             self._history.history['val_loss'].extend(more_history.history['val_loss'])
-
-        self._save_weights()
+        if save_wts:
+            self._save_weights()
         self._eval()
 
     def _eval(self):
@@ -266,16 +270,16 @@ class DenseExperiment(object):
         filename = "%s_%s_%s.png" % (prefix, ("diffs" if show_diffs else "reconstructed"), suffix)
         self._maybe_save_fig(fig, filename)
 
-    def _maybe_save_fig(self, fig,filename):
+    def _maybe_save_fig(self, fig, filename):
         if self._save_figs:
             fig.tight_layout()
             fig.savefig(filename, bbox_inches='tight')
             plt.close(fig)
             return filename
-        #else:
+        # else:
         #    plt.show()
         #    return None
-        
+
     def _show_err_hist(self, ax, labels, band_colors):
         ax.hist(self._mse_errors, bins=100, color='gray', alpha=0.8)
         ax.set_title('MSE distribution & sample group locations', fontsize=12)
@@ -299,17 +303,17 @@ class DenseExperiment(object):
         """
         # first round, load weights if available
         self._attempt_resume()
-        
+
         for stage in range(n_stages):
             self._stage = stage
             logging.info("Running stage %i of %i", stage + 1, n_stages)
-
             self.train_more()
             self._plot_history()
             self.plot(show_diffs=False)
             self.plot(show_diffs=True)
             if not self._save_figs:
                 plt.show()
+
 
 def _get_args():
     """
@@ -335,6 +339,7 @@ def dense_demo():
     logging.info("Running Dense Autoencoder with args: %s", args)
     de = DenseExperiment(enc_layers=args.layers, n_epochs=args.epochs, save_figs=args.no_plot)
     de.run_staged_experiment(n_stages=args.stages)
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

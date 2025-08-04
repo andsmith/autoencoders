@@ -52,7 +52,11 @@ class SparseExperiment(DenseExperiment):
         #     return None
 
     def run_staged_experiment(self, n_stages=5):
-        self._attempt_resume()
+        if not self._attempt_resume():
+            logging.info("Training 1 epoch to show loss function terms.")
+            self.train_more(n_epochs=1, save_wts=False)
+        logging.info("***************************")
+        logging.info("Starting %i stages of training %i epochs each.", n_stages, self._n_epochs)
         for stage in range(n_stages):
             self._stage = stage
             logging.info("Running stage %i of %i", stage + 1, n_stages)
@@ -64,9 +68,8 @@ class SparseExperiment(DenseExperiment):
             encoded_per_digit = self.plot_sparsity()
             self.plot_code_samples(encoded_per_digit)
             if not self._save_figs:
+                plt.tight_layout()
                 plt.show()
-
-            
 
     def _init_encoder_layers(self, inputs):
         encoding_layers = super()._init_encoder_layers(inputs)
@@ -89,14 +92,17 @@ class SparseExperiment(DenseExperiment):
         if file_ext:
             fname += ".weights.h5"
         return fname
-    
+
     def _get_mse_term(self, x_true, x_pred):
         """
         Calculate the mean squared error between the true and predicted images.
         """
         mse_loss = tf.keras.losses.MeanSquaredError()(x_true, x_pred)
         return mse_loss
-    
+
+    def _get_loss_fn(self):
+        return self.sparse_loss
+
     def _get_sparse_term(self, x_true, x_pred, reg_method='l1'):
         """
         Calculate the sparsity term based on the encoding of the input images.
@@ -126,13 +132,13 @@ class SparseExperiment(DenseExperiment):
             err = np.sum((imageA.astype("float") - imageB.astype("float")) ** 2)
             err /= float(imageA.shape[0])
             return err
-        
+
         self._encoded_test = self.encode_samples(self.x_test)
         self._decoded_test = self.decode_samples(self._encoded_test)
         self._both_test = self.autoencoder.predict(self.x_test)
 
         self._mse_errors = np.array([mse_err(img_a, img_b) for img_a, img_b in zip(self.x_test, self._both_test)])
-        self._mse_term= self._get_mse_term(self.x_test, self._both_test).numpy()
+        self._mse_term = self._get_mse_term(self.x_test, self._both_test).numpy()
         self._sparse_term = self._get_sparse_term(self.x_test, self._both_test).numpy()
         self._losses = self.sparse_loss(self.x_test, self._both_test).numpy()
 
@@ -143,15 +149,14 @@ class SparseExperiment(DenseExperiment):
             logging.warning("Losses do not match expected values! Differences: %s", diffs[diffs > 1e-6])
         else:
             logging.info("Losses match expected values.")
-                
+
         self._order = np.argsort(self._mse_errors)
         logging.info("Evaluation completed on %i samples:", self._mse_errors.size)
         logging.info("\tMean squared error: %.4f (%.4f)", np.mean(self._mse_errors), np.std(self._mse_errors))
         logging.info("\tMSE term: %.4f", self._mse_term)
         logging.info("\tSparsity term: %.4f", self._sparse_term)
-        logging.info("\tMean loss (lambda=%.1f): %.4f (%.4f)", self.reg_lambda, np.mean(self._losses), np.std(self._losses))
-
-
+        logging.info("\tMean loss (lambda=%.1f): %.4f (%.4f)", self.reg_lambda,
+                     np.mean(self._losses), np.std(self._losses))
 
     def plot_sparsity(self, n_disp_samples=33, n_stat_samples=1000):
         """
@@ -204,7 +209,7 @@ class SparseExperiment(DenseExperiment):
 
         filename = "%s_sparsity_stage_%s.png" % (self.get_name(), self._stage)
         self._maybe_save_fig(fig, filename)
-
+        fig.tight_layout()
         return z_per_digit
 
     def _subplot_reconstructions(self, original_ax, reconstructed_ax, x_disp, thresh):
@@ -319,7 +324,7 @@ class SparseExperiment(DenseExperiment):
         # Plot the image
         n_disp_offset = n_disp_samples//20
         ax.imshow(code_arr, aspect='auto', cmap='gray', interpolation='none',
-                  extent = (0, code_size, -n_disp_offset, n_disp_samples-n_disp_offset))
+                  extent=(0, code_size, -n_disp_offset, n_disp_samples-n_disp_offset))
         title = ("Binary Encoding of %i bits, evaluated on %i test samples\n" % (code_size, n_samples)) +\
             ("Units always On: %i, always Off: %i  (of  %i)\nUnique Samples: %i  (of %i)" % (n_always_on,
                                                                                              n_always_off,
@@ -334,9 +339,9 @@ class SparseExperiment(DenseExperiment):
         # space evenly, in the middle of each digit's band of samples in the image
         tick_label_positions = np.linspace(0, n_disp_samples - n_disp_offset*2, 10)
         tick_labels = ["%i" % i for i in range(9, -1, -1)]
-        
+
         ax.set_yticks(tick_label_positions)
-        ax.set_yticklabels(tick_labels)        
+        ax.set_yticklabels(tick_labels)
         filename = "%s_codes_%s.png" % (self.get_name(), self._stage)
         self._maybe_save_fig(fig, filename)
 
