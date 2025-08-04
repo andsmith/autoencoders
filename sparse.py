@@ -1,3 +1,5 @@
+import os
+from argparse import ArgumentParser
 from dense import DenseExperiment
 import numpy as np
 import matplotlib.pyplot as plt
@@ -23,10 +25,6 @@ class BinaryActivation(tf.keras.layers.Layer):
         return binary_step_with_straight_through_estimator(inputs)
 
 
-
-from argparse import ArgumentParser
-import os
-
 class SparseExperiment(DenseExperiment):
     _DEFAULT_ACT_FNS = {
         'encoding': 'relu',
@@ -36,15 +34,17 @@ class SparseExperiment(DenseExperiment):
 
     def __init__(self, enc_layers=(64,), n_epochs=25, act_fns=None, reg_lambda=0.5, save_figs=True):
         activation_functions = self._DEFAULT_ACT_FNS.copy() if act_fns is None else act_fns
-        super().__init__(enc_layers=enc_layers, n_epochs=n_epochs, act_fns=activation_functions, save_figs=save_figs)
         self.reg_lambda = reg_lambda
+        super().__init__(enc_layers=enc_layers, n_epochs=n_epochs, act_fns=activation_functions, save_figs=save_figs)
         if self.act_fns['binarize_code'] and self.act_fns['encoding'] != 'relu':
-            raise ValueError("Binarization requires 'relu' activation for encoding layer, but got '%s'" % self.act_fns['encoding'])
+            raise ValueError("Binarization requires 'relu' activation for encoding layer, but got '%s'" %
+                             self.act_fns['encoding'])
 
     def _maybe_save_fig(self, fig, filename):
         if hasattr(self, '_save_figs') and self._save_figs:
             fig.tight_layout()
             fig.savefig(filename, bbox_inches='tight')
+            logging.info("Saved figure to %s", filename)
             plt.close(fig)
             return filename
         # else:
@@ -61,10 +61,12 @@ class SparseExperiment(DenseExperiment):
             self.plot(show_diffs=False)
             self.plot(show_diffs=True)
 
-            encoded_per_digit = self.plot_threshold_slider_app()
+            encoded_per_digit = self.plot_sparsity()
             self.plot_code_samples(encoded_per_digit)
             if not self._save_figs:
                 plt.show()
+
+            
 
     def _init_encoder_layers(self, inputs):
         encoding_layers = super()._init_encoder_layers(inputs)
@@ -81,36 +83,81 @@ class SparseExperiment(DenseExperiment):
             return str(func)
 
         desc_str = "_".join([str(n) for n in self.enc_layer_desc])
-        bin_str = "" if not self.act_fns['binarize_code'] else "_BIN"
-        fname = ("Sparse(%s%s_encode=%s_internal=%s)_TrainEpochs=%i" %
-                 (desc_str, bin_str, func_to_str(self.act_fns['encoding']),
-                  func_to_str(self.act_fns['internal']), self._n_epochs))
+        bin_str = "_REAL" if not self.act_fns['binarize_code'] else "_BINARY"
+        fname = ("Sparse(%s%s_regL=%.1f)_TrainEpochs=%i" %
+                 (desc_str, bin_str, self.reg_lambda, self._n_epochs))
         if file_ext:
             fname += ".weights.h5"
         return fname
-
-    def sparse_loss(self, x_true, x_pred, reg_method='l1'):
+    
+    def _get_mse_term(self, x_true, x_pred):
+        """
+        Calculate the mean squared error between the true and predicted images.
+        """
         mse_loss = tf.keras.losses.MeanSquaredError()(x_true, x_pred)
+        return mse_loss
+    
+    def _get_sparse_term(self, x_true, x_pred, reg_method='l1'):
+        """
+        Calculate the sparsity term based on the encoding of the input images.
+        """
         z = self.encoder(x_true)
         if reg_method == 'entropy':
-            # DON"T USE with binarized features, will always be zero.
-            # minimize entropy
-            binary_reg_term = tf.reduce_mean(z * (1-z))
+            # Minimize entropy
+            binary_reg_term = tf.reduce_mean(z * (1 - z))
         elif reg_method == 'l1':
-            # use the L1 norm of the encoded vector, normalized by the number of samples (mean active feature count)
+            # Use the L1 norm of the encoded vector, normalized by the number of samples (mean active feature count)
             binary_reg_term = tf.reduce_mean(z)
-        elif reg_method == None:
+        elif reg_method is None:
             return 0.0
         else:
             raise ValueError("Unknown method for sparse loss: %s" % reg_method)
 
-        return mse_loss * (1-self.reg_lambda) + binary_reg_term * self.reg_lambda
+        return binary_reg_term
 
-    def plot_threshold_slider_app(self, n_disp_samples=33, n_stat_samples=1000):
+    def sparse_loss(self, x_true, x_pred, reg_method='l1'):
+        mse_loss = self._get_mse_term(x_true, x_pred)
+        binary_reg_term = self._get_sparse_term(x_true, x_pred, reg_method)
+        return mse_loss * (1 - self.reg_lambda) + binary_reg_term * self.reg_lambda
+
+    def _eval(self):
+
+        def mse_err(imageA, imageB):
+            err = np.sum((imageA.astype("float") - imageB.astype("float")) ** 2)
+            err /= float(imageA.shape[0])
+            return err
+        
+        self._encoded_test = self.encode_samples(self.x_test)
+        self._decoded_test = self.decode_samples(self._encoded_test)
+        self._both_test = self.autoencoder.predict(self.x_test)
+
+        self._mse_errors = np.array([mse_err(img_a, img_b) for img_a, img_b in zip(self.x_test, self._both_test)])
+        self._mse_term= self._get_mse_term(self.x_test, self._both_test).numpy()
+        self._sparse_term = self._get_sparse_term(self.x_test, self._both_test).numpy()
+        self._losses = self.sparse_loss(self.x_test, self._both_test).numpy()
+
+        # check that losses = (1-lambda) * mse + lambda * sparse_term
+        expected_losses = (1 - self.reg_lambda) * self._mse_term + self.reg_lambda * self._sparse_term
+        diffs = np.abs(self._losses - expected_losses)
+        if np.any(diffs > 1e-6):
+            logging.warning("Losses do not match expected values! Differences: %s", diffs[diffs > 1e-6])
+        else:
+            logging.info("Losses match expected values.")
+                
+        self._order = np.argsort(self._mse_errors)
+        logging.info("Evaluation completed on %i samples:", self._mse_errors.size)
+        logging.info("\tMean squared error: %.4f (%.4f)", np.mean(self._mse_errors), np.std(self._mse_errors))
+        logging.info("\tMSE term: %.4f", self._mse_term)
+        logging.info("\tSparsity term: %.4f", self._sparse_term)
+        logging.info("\tMean loss (lambda=%.1f): %.4f (%.4f)", self.reg_lambda, np.mean(self._losses), np.std(self._losses))
+
+
+
+    def plot_sparsity(self, n_disp_samples=33, n_stat_samples=1000):
         """
-        Show an interactive plot:
+        Encode all statistics samples, calculate reconstruction MSE, and statistics of the encoded vectors
 
-        At the bottom, a slider to adjust the threshold, a cut-off to change encoded vectors from [0,1] floats to binary values.
+
         On the left, two box plots (two axes), one above the other:
             - The reconstruction error (mse), one box per digit class.
             - The sparsity of the encoded vectors, one box per digit class.
@@ -151,16 +198,16 @@ class SparseExperiment(DenseExperiment):
 
         z_per_digit = {digit: self.encode_samples(x_stat[digit], binarize_thresh=thresh) for digit in x_stat.keys()}
         decoded_per_digit = {digit: self.decode_samples(z) for digit, z in z_per_digit.items()}
-        self._plot_sparsity(sparsity_box_ax, z_per_digit, thresh)
-        self._plot_mse(mse_box_ax, x_stat, decoded_per_digit, thresh)
-        self._plot_reconstructions(original_mosaic_ax, reconstructed_mosaic_ax, x_disp, thresh)
+        self._subplot_sparsity(sparsity_box_ax, z_per_digit, thresh)
+        self._subplot_mse(mse_box_ax, x_stat, decoded_per_digit, thresh)
+        self._subplot_reconstructions(original_mosaic_ax, reconstructed_mosaic_ax, x_disp, thresh)
 
         filename = "%s_sparsity_stage_%s.png" % (self.get_name(), self._stage)
         self._maybe_save_fig(fig, filename)
 
         return z_per_digit
 
-    def _plot_reconstructions(self, original_ax, reconstructed_ax, x_disp, thresh):
+    def _subplot_reconstructions(self, original_ax, reconstructed_ax, x_disp, thresh):
         """
         Plot the original and reconstructed digits side by side.
         Left plot is original images, 
@@ -169,7 +216,7 @@ class SparseExperiment(DenseExperiment):
         reconstructed_imgs = []
         # get dimensions of the subplot for shaping the mosaics aspect ratio
         bbox = original_ax.get_window_extent().transformed(plt.gcf().dpi_scale_trans.inverted())
-    
+
         ax_h, ax_w = bbox.height, bbox.width
         tile_h, tile_w = ax_h/10, ax_w
         aspect = tile_w / tile_h
@@ -192,8 +239,7 @@ class SparseExperiment(DenseExperiment):
         reconstructed_ax.set_title("Reconstructed Images")
         reconstructed_ax.axis('off')
 
-
-    def _plot_sparsity(self, ax, encoded_per_digit, thresh):
+    def _subplot_sparsity(self, ax, encoded_per_digit, thresh):
         """
         Plot the sparsity of the encoded vectors.
         """
@@ -202,14 +248,14 @@ class SparseExperiment(DenseExperiment):
         for digit in range(10):
             digit_stats.append(np.sum(encoded_per_digit[digit], axis=1))  # Mean sparsity per sample
         ax.clear()
-        ax.set_title("Sparsity: n features active (of %i), thresh %.2f" % (len(encoded_per_digit[0][0]), thresh))
+        ax.set_title("Sparsity: mean active units (of %i)." % (len(encoded_per_digit[0][0]), ))
         sns.boxplot(data=digit_stats, ax=ax)
 
         # turn off x axis
         # ax.xaxis.set_visible(False)
         # ax.set_xlabel("Sparsity")
 
-    def _plot_mse(self, ax, truth_per_digit, decoded_per_digit, thresh):
+    def _subplot_mse(self, ax, truth_per_digit, decoded_per_digit, thresh):
         """
         Plot the reconstruction error (MSE) for each digit class.
         """
@@ -252,33 +298,47 @@ class SparseExperiment(DenseExperiment):
         Sort the encoded bits by the number of active samples (over all digits), so
         the most frequently used code bits are on the left.
         """
-        # all samples for getting the order
         fig, ax = plt.subplots(figsize=(12, 9))
+
+        # all samples for getting the order and stats/counts:
         code_arr = np.concatenate([encoded_digits[digit] for digit in range(10)], axis=0)
+        n_unique_samples = np.unique(code_arr, axis=0).shape[0]
+        n_always_on = np.sum(np.sum(code_arr, axis=0) == code_arr.shape[0])
+        n_always_off = np.sum(np.sum(code_arr, axis=0) == 0)
+        # Sort the encoded bits by the number of active samples (over all digits), so
+        # the most frequently used code bits are on the left.
         code_counts = np.sum(code_arr, axis=0)
         code_order = np.argsort(code_counts)[::-1]
         code_size = code_arr.shape[1]
-        # Sort the encoded bits by the number of active samples (over all digits), so
-        # the most frequently used code bits are on the left.
-        code_arr = np.concatenate([encoded_digits[digit][:n_per_row, code_order] for digit in range(10)[::-1]], axis=0)
-        img = code_arr
+        n_samples = code_arr.shape[0]
+
+        # Pare down to just the samples to display:
+        code_arr = np.concatenate([encoded_digits[digit][:n_per_row, code_order] for digit in range(10)], axis=0)
+        n_disp_samples = code_arr.shape[0]
 
         # Plot the image
-        ax.imshow(img, aspect='auto', cmap='gray', interpolation='nearest')
-        ax.set_title("Encoded Digits")
+        n_disp_offset = n_disp_samples//20
+        ax.imshow(code_arr, aspect='auto', cmap='gray', interpolation='none',
+                  extent = (0, code_size, -n_disp_offset, n_disp_samples-n_disp_offset))
+        title = ("Binary Encoding of %i bits, evaluated on %i test samples\n" % (code_size, n_samples)) +\
+            ("Units always On: %i, always Off: %i  (of  %i)\nUnique Samples: %i  (of %i)" % (n_always_on,
+                                                                                             n_always_off,
+                                                                                             code_size,
+                                                                                             n_unique_samples,
+                                                                                             n_samples))
+        ax.set_title(title)
         ax.set_xlabel("Code Bits")
         ax.set_ylabel("Digit")
 
         # make the y-axis show the digit numbers
-        ax.set_yticks(np.arange(10))
-        ax.set_yticklabels(np.arange(10))
-        fig.colorbar(ax.imshow(img, aspect='auto', cmap='gray', interpolation='nearest'), ax=ax, orientation='vertical')
+        # space evenly, in the middle of each digit's band of samples in the image
+        tick_label_positions = np.linspace(0, n_disp_samples - n_disp_offset*2, 10)
+        tick_labels = ["%i" % i for i in range(9, -1, -1)]
         
+        ax.set_yticks(tick_label_positions)
+        ax.set_yticklabels(tick_labels)        
         filename = "%s_codes_%s.png" % (self.get_name(), self._stage)
         self._maybe_save_fig(fig, filename)
-
-
-
 
 
 def _get_args():
@@ -295,11 +355,14 @@ def _get_args():
                         help='If set, saves images instead of showing them interactively')
     return parser.parse_args()
 
+
 def sparse_demo():
     args = _get_args()
     logging.info("Running Sparse Autoencoder with args: %s", args)
-    se = SparseExperiment(enc_layers=args.layers, n_epochs=args.epochs, reg_lambda=args.reg_lambda, save_figs=args.no_plot)
+    se = SparseExperiment(enc_layers=args.layers, n_epochs=args.epochs,
+                          reg_lambda=args.reg_lambda, save_figs=args.no_plot)
     se.run_staged_experiment(n_stages=args.stages)
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
