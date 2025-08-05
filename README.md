@@ -80,3 +80,10 @@ Interestingly, some of the code bits are always on (columns of all white pixels 
 Zooming in to the interesting region shows encodings of the same digits are similar to each other, different from encodings of different digit images:
 
 ![sparse codes](/assets/sparse_codes.png)
+
+
+### Misc observations about sparsity, loss fucnction and binary code units:
+
+With the `L1` and `L1-squared` loss functions on binary units (tanh + binary/Heaviside pass-through layers at the end of the encoding stage), the training process pressures the network to find code words with fewer active bits.
+
+With the `entropy` and `entropy-squared` loss functions (using real-valued/sigmoid units for the code layer),  

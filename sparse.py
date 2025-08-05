@@ -63,7 +63,7 @@ class SparseEvaluation(object):
                                 for d in range(10)}
 
         def _get_terms_stats_and_losses(true_samples, encoded_samples, decoded_samples):
-            logging.info("Evaluating sparse autoencoder on %i test samples with threshold %s",
+            logging.info("Evaluating sparse autoencoder on %i samples with threshold %s",
                 true_samples.shape[0], thresh_str)
 
             mse_errors = np.array([self.experiment.get_mse_terms(
@@ -174,7 +174,7 @@ class SparseExperiment(DenseExperiment):
 
     def plot_distributions(self, result, show_diffs=False, n_samp=36):
         prefix = self.get_name(file_ext=False)
-        suffix = "stage_%i" % (self._stage+1)
+        suffix = "stage_%i" % (self._stage,)
         fig = plt.figure(constrained_layout=True, figsize=(10, 8))
         # show best, worst, and middle 4 quantiles above a histogram
         n_quantiles = 8
@@ -419,6 +419,7 @@ class SparseExperiment(DenseExperiment):
         ax.set_title("Sparsity (code_units=%i, non-constant=%i), bits to encode each digit:" %
                      (code_size, result.test_errs['n_codebits_used']), fontsize=11)
         sns.boxplot(data=digit_stats, ax=ax)
+        ax.set_ylim(0, result.test_errs['n_codebits_used'] + 1)
 
         # turn off x axis
         # ax.xaxis.set_visible(False)
