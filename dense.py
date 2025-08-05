@@ -109,7 +109,7 @@ class DenseExperiment(object):
             decoder_layers.append(layer)
         return decoder_layers
 
-    def _init_model(self):
+    def _init_model(self, inc_pre_binarized=False):
         """
         Initialize all the layers, keep references so internal states can be accessed later.
         """
@@ -120,6 +120,7 @@ class DenseExperiment(object):
         self.decoding_layers = self._init_decoder_layers(encoding)
         decoding = self.decoding_layers[-1]
         self.encoder = Model(inputs=inputs, outputs=encoding, name='encoder')
+        self.pre_binarized_encoder = Model(inputs=inputs, outputs=self.encoding_layers[-2], name='pre_binarized_encoder') if len(self.encoding_layers) > 1 else None
         self.autoencoder = Model(inputs=inputs, outputs=decoding, name='autoencoder')
         self.decoder = Model(inputs=encoding, outputs=decoding, name='decoder')
         self.autoencoder.compile(optimizer='adam', loss=self._get_loss_fn())
