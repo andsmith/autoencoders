@@ -10,6 +10,7 @@ from img_util import diff_img, make_img, make_digit_mosaic
 import os
 from argparse import ArgumentParser
 from matplotlib.gridspec import GridSpec
+import json
 
 
 class DenseExperiment(object):
@@ -39,7 +40,7 @@ class DenseExperiment(object):
             self.act_fns['output'] = 'sigmoid'
 
         self._d_in = 784  # number of pixels in MNIST images
-        self._history = None
+        self._history_dict = None
         self._load_data()
         self._init_model()
         logging.info("Experiment initialized:  %s" % self.get_name())
@@ -144,6 +145,11 @@ class DenseExperiment(object):
         filename = self.get_name(file_ext=True)
         self.autoencoder.save_weights(filename)
         logging.info("Model weights saved to %s", os.path.join(path, filename))
+        # save history
+        hist = self.get_name(file_ext=False) + "_history.json"
+        with open(os.path.join(path, hist), 'w') as f:
+            json.dump(self._history_dict, f)
+        logging.info("Training history saved to %s", os.path.join(path, hist))
 
     def _load_weights(self, path='.'):
         filename = self.get_name(file_ext=True)
@@ -151,6 +157,16 @@ class DenseExperiment(object):
         if os.path.exists(full_path):
             self.autoencoder.load_weights(full_path)
             logging.info("Model weights loaded from %s", full_path)
+
+            hist = self.get_name(file_ext=False) + "_history.json"
+            hist_path = os.path.join(path, hist)
+            if os.path.exists(hist_path):
+                with open(hist_path, 'r') as f:
+                    self._history_dict = json.load(f)
+                logging.info("Training history loaded from %s", hist_path)
+            else:
+                self._history_dict = None
+                logging.info("No training history found at %s", hist_path)
         else:
             raise FileNotFoundError(f"Model weights file {full_path} not found.")
 
@@ -170,15 +186,16 @@ class DenseExperiment(object):
                                             epochs=n_epochs, batch_size=512,
                                             validation_data=(self.x_test, self.x_test))
 
-        if self._history is None:
-            self._history = more_history
+        if self._history_dict is None:
+            self._history_dict = more_history.history
         else:
             # merge histories
-            self._history.history['loss'].extend(more_history.history['loss'])
-            self._history.history['val_loss'].extend(more_history.history['val_loss'])
+            self._history_dict['loss'].extend(more_history.history['loss'])
+            self._history_dict['val_loss'].extend(more_history.history['val_loss'])
+
         if save_wts:
             self._save_weights()
-        self._eval()
+        return self._eval()
 
     def _eval(self):
 
@@ -200,8 +217,8 @@ class DenseExperiment(object):
         suffix = "stage_%i" % (self._stage+1)
         filename = "%s_training_history_%s.png" % (prefix, suffix)
         fig, ax = plt.subplots(figsize=(10, 6))
-        ax.plot(self._history.history['loss'])
-        ax.plot(self._history.history['val_loss'])
+        ax.plot(self._history_dict['loss'])
+        ax.plot(self._history_dict['val_loss'])
         ax.set_title('Training history: model loss')
         ax.set_ylabel('Loss')
         ax.set_xlabel('Epoch')
