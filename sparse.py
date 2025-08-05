@@ -27,82 +27,119 @@ class BinaryActivation(tf.keras.layers.Layer):
 
 
 class SparseEvaluation(object):
-    def __init__(self, experiment, x_test_per_digit):
+    def __init__(self, experiment):
         """
         Initialize the SparseEvaluation with the experiment and test samples.
         :param experiment: The SparseExperiment instance.
-        :param x_test_per_digit: A dictionary of test samples per digit class, 
-           key is the digit d, value is an N_d x D array of N_d test samples.
+                   key is the digit d, value is an N_d x D array of N_d test samples.
         :param n_display_samples: The number of samples to display for each digit.
         """
         self.experiment = experiment
-        self.x_test_per_digit = x_test_per_digit
         self._eval_test_set()
 
     def _eval_test_set(self):
+        x_test, y_test = self.experiment.x_test, self.experiment.y_test
+        x_train, y_train = self.experiment.x_train, self.experiment.y_train
 
         self.code_thresh = self.experiment.code_thresh
-        self.encoded_test_by_digit = {digit: self.experiment.encode_samples(self.x_test_per_digit[digit],
-                                                                            binarize_thresh=self.code_thresh)
-                                      for digit in self.x_test_per_digit.keys()}
-        self.decoded_test_by_digit = {digit: self.experiment.decode_samples(self.encoded_test_by_digit[digit])
-                                      for digit in self.encoded_test_by_digit.keys()}
 
-        self.encoded_mat = np.concatenate([self.encoded_test_by_digit[d] for d in range(10)], axis=0)
-        self.decoded_mat = np.concatenate([self.decoded_test_by_digit[d] for d in range(10)], axis=0)
-        self.x_test_mat = np.concatenate([self.x_test_per_digit[d] for d in range(10)], axis=0)
+        thresh_str = ("%.2f" % self.code_thresh) if self.code_thresh is not None else '(not binarized)'
 
-        logging.info("Evaluating sparse autoencoder on %i test samples with threshold %s",
-                     self.x_test_mat.shape[0], ("%.2f" % self.code_thresh) if self.code_thresh is not None else '(not binarized)')
-        self.n_unique_samples = np.unique(self.encoded_mat, axis=0).shape[0]
-        self.n_codebits_always_on = np.sum(np.sum(self.encoded_mat, axis=0) == self.encoded_mat.shape[0])
-        self.n_codebits_always_off = np.sum(np.sum(self.encoded_mat, axis=0) == 0)
-        self.n_codebits_used = self.encoded_mat.shape[1] - (self.n_codebits_always_on + self.n_codebits_always_off)
+        logging.info("Encoding/decoding test set (%i samples) with threshold %s", x_test.shape[0], thresh_str)
+        self.encoded_test_mat = self.experiment.encode_samples(x_test, binarize_thresh=self.code_thresh)
+        self.decoded_test_mat = self.experiment.decode_samples(self.encoded_test_mat)
+        
+        logging.info("Encoding/decoding training set (%i samples) with threshold %s", x_train.shape[0], thresh_str)
+        self.encoded_train_mat = self.experiment.encode_samples(x_train, binarize_thresh=self.code_thresh)
+        self.decoded_train_mat = self.experiment.decode_samples(self.encoded_train_mat)
 
-        self.mse_errors = np.array([self.experiment.get_mse_terms(self.x_test_mat, self.decoded_mat).numpy()]).reshape(-1)
-        self.sparse_errors = np.array([self.experiment.get_sparse_terms(self.x_test_mat, self.decoded_mat).numpy()]).reshape(-1)
-        self.sparse_term = np.mean(self.sparse_errors)
-        self.mse_term = np.mean(self.mse_errors)
-        self.loss_terms = (1-self.experiment.reg_lambda) * self.mse_errors + \
-            self.experiment.reg_lambda * self.sparse_errors
+        # sorting test data by digit is helpful for plotting
+        self.encoded_test_by_digit = {d: self.encoded_test_mat[y_test == d]
+                                      for d in range(10)}
+        self.decoded_test_by_digit = {d: self.decoded_test_mat[y_test == d]
+                                      for d in range(10)}
+        
+        self.x_test_by_digit = {d: x_test[y_test == d]
+                                for d in range(10)}
 
-        self.order = np.argsort(self.loss_terms).reshape(-1)
+        def _get_terms_stats_and_losses(true_samples, encoded_samples, decoded_samples):
+            logging.info("Evaluating sparse autoencoder on %i test samples with threshold %s",
+                true_samples.shape[0], thresh_str)
 
-        logging.info("Evaluation completed on %i samples, BINARIZING the code layer:", self.mse_errors.size)
-        logging.info("\tMean squared error: %.4f (%.4f)", np.mean(self.mse_errors), np.std(self.mse_errors))
-        logging.info("\tMSE term: %.4f", self.mse_term)
-        logging.info("\tSparsity term: %.4f", self.sparse_term)
-        logging.info("\tCombined loss (w/lambda=%.4f): %.4f ", self.experiment.reg_lambda, np.mean(self.loss_terms))
-        logging.info("\tUnique encoded samples (of %i): %i", self.n_unique_samples, self.encoded_mat.shape[0])
-        logging.info("\tCodes unit utilization (%i total):\n\t\t\tused: %i",
-                     self.encoded_mat.shape[1], self.n_codebits_used)
-        logging.info("\t\talways On: %i,\n\t\t\talways Off: %i", self.n_codebits_always_on, self.n_codebits_always_off)
+            mse_errors = np.array([self.experiment.get_mse_terms(
+                true_samples, decoded_samples).numpy()]).reshape(-1)
+            sparse_errors = np.array([self.experiment.get_sparse_terms(
+                true_samples, decoded_samples).numpy()]).reshape(-1)
+            loss_terms = (1-self.experiment.reg_lambda) * mse_errors + \
+                self.experiment.reg_lambda * sparse_errors
+            n_unique_samples = np.unique(encoded_samples, axis=0).shape[0]
+            n_codebits_always_on = np.sum(np.sum(encoded_samples, axis=0) == encoded_samples.shape[0])
+            n_codebits_always_off = np.sum(np.sum(encoded_samples, axis=0) == 0)
+            n_codebits_used = encoded_samples.shape[1] - (n_codebits_always_on + n_codebits_always_off)
+
+            return {'n_samples': true_samples.shape[0], 
+                    'mse_errors': mse_errors,
+                    'sparse_errors': sparse_errors,
+                    'loss_terms': loss_terms,
+                    'sparse_term': np.mean(sparse_errors),
+                    'mse_term': np.mean(mse_errors),
+                    'loss': np.mean(loss_terms),
+                    'n_unique_samples': n_unique_samples,
+                    'n_codebits_always_on': n_codebits_always_on,
+                    'n_codebits_always_off': n_codebits_always_off,
+                    'n_codebits_used': n_codebits_used}
+
+        self.test_errs = _get_terms_stats_and_losses(x_test, self.encoded_test_mat, self.decoded_test_mat)
+        self.train_errs = _get_terms_stats_and_losses(x_train, self.encoded_train_mat, self.decoded_train_mat)
+
+        self.order = np.argsort(self.test_errs['loss_terms']).reshape(-1)
 
 
+        def _log_eval(errs, kind):
+            code_size = self.encoded_test_mat.shape[1]
+
+            logging.info("\n\n\n%s evaluation completed on %i samples, BINARIZING the code layer:", kind, errs['n_samples'])
+            logging.info("\tMean squared error: %.4f (%.4f)", np.mean(errs['mse_errors']), np.std(errs['mse_errors']))
+            logging.info("\tMSE term: %.4f", errs['mse_term'])
+            logging.info("\tSparsity term: %.4f", errs['sparse_term'])
+            logging.info("\tCombined loss (w/lambda=%.4f): %.4f ", self.experiment.reg_lambda, np.mean(errs['loss_terms']))
+            logging.info("\tUnique encoded samples (of %i): %i", errs['n_unique_samples'], errs['n_samples'])
+            logging.info("\tCodes unit utilization (%i total):\n\t\t\tused: %i", code_size, self.test_errs['n_codebits_used'])
+            logging.info("\t\talways On: %i,\n\t\t\talways Off: %i", self.test_errs['n_codebits_always_on'], self.test_errs['n_codebits_always_off'])
+
+        _log_eval(self.test_errs, "Test set")
+        _log_eval(self.train_errs, "Training set")
 class SparseExperiment(DenseExperiment):
 
     _DEFAULT_ACT_FNS = {
-        'encoding': 'sigmoid',
+        # 'encoding' set in __init__
         'binarize_code_units': False,
         'internal': 'relu',
     }
 
     def __init__(self, enc_layers=(64,), n_epochs=25, act_fns=None, reg_lambda=0.5, save_figs=True,
-                 reg_method='l1', binarize_code_units=None):
+                 reg_method='L1', binarize_code_units=None):
         activation_functions = self._DEFAULT_ACT_FNS.copy() if act_fns is None else act_fns
         self.reg_lambda = reg_lambda
         self.reg_method = reg_method
         if binarize_code_units is not None:
             activation_functions['binarize_code_units'] = binarize_code_units
 
+        if activation_functions['binarize_code_units']:
+            activation_functions['encoding'] = 'tanh'
+        else:
+            activation_functions['encoding'] = 'sigmoid'
+
+        # Check not using an entropy method with binary code units (will always give a reg term of 0)
+        if self.reg_method.startswith('entropy') and activation_functions['binarize_code_units']:
+            raise ValueError("Entropy regularization methods require real valued code activations, else a*(1-a) will always be zero, "
+                             "but got reg_method=%s and binarize_code_units=%s" %
+                             (self.reg_method, activation_functions['binarize_code_units']))
+
         super().__init__(enc_layers=enc_layers, n_epochs=n_epochs, act_fns=activation_functions, save_figs=save_figs)
 
         self.code_thresh = {'sigmoid': 0.5,
-                           'relu': 0.0}[self.act_fns['encoding']]
-
-        if self.act_fns['binarize_code_units'] and self.act_fns['encoding'] != 'relu':
-            raise ValueError("Binarization requires 'relu' activation for encoding layer, but got '%s'" %
-                             self.act_fns['encoding'])
+                            'tanh': 0.0}[self.act_fns['encoding']]
 
     def _maybe_save_fig(self, fig, filename):
         if hasattr(self, '_save_figs') and self._save_figs:
@@ -125,6 +162,7 @@ class SparseExperiment(DenseExperiment):
             self._stage = stage
             logging.info("Running stage %i of %i", stage + 1, n_stages)
             result = self.train_more()
+
             self._plot_history()
             self.plot_distributions(result, show_diffs=False)
             self.plot_distributions(result, show_diffs=True)
@@ -160,10 +198,10 @@ class SparseExperiment(DenseExperiment):
             :param color: Color for the title text.
             """
             if not show_diffs:
-                reconstructed_imgs = [make_img(result.decoded_mat[i]) for i in inds]
+                reconstructed_imgs = [make_img(result.decoded_test_mat[i]) for i in inds]
                 image = make_digit_mosaic(reconstructed_imgs, mosaic_aspect=aspect)
             else:
-                diff_imgs = [diff_img(result.x_test_mat[i], result.decoded_mat[i]) for i in inds]
+                diff_imgs = [diff_img(self.x_test[i], result.decoded_test_mat[i]) for i in inds]
                 image = make_digit_mosaic(diff_imgs, mosaic_aspect=aspect)
 
             ax.imshow(image)
@@ -191,7 +229,7 @@ class SparseExperiment(DenseExperiment):
             "\nData: n_train=%i, n_test = %i " % (self.x_train.shape[0], self.x_test.shape[0])
         if show_diffs:
             title += "          RED: decoded pixel >= 10% too high,"
-        title += "\nResults: test MSE = %.4f (%.4f)" % (np.mean(result.mse_errors), np.std(result.mse_errors))
+        title += "\nResults: test MSE = %.4f (%.4f)" % (np.mean(result.test_errs['mse_errors']), np.std(result.test_errs['mse_errors']))
         if show_diffs:
             title += "             BLUE: decoded pixel >= 10% too low."
         plt.suptitle(title, fontsize=14)
@@ -201,10 +239,10 @@ class SparseExperiment(DenseExperiment):
         # i.e. find the x-positions of the lowest and highest mse for a sample group and put a colord band over that portion of the MSE histogram.
         #  THen do the same for the regularization term histogram.
 
+        loss_title = "Test loss dist. (%i samp.), w/sample groups at %i quantiles" % (result.test_errs['loss_terms'].size, n_quantiles)
 
-        loss_title = "Test loss dist. (%i samp.), w/sample groups at %i quantiles" % (result.loss_terms.size, n_quantiles)
-
-        self._show_err_hist(loss_hist_axis, result.loss_terms, band_colors=colors, quantile_band_inds=quant_inds, title=loss_title)
+        self._show_err_hist(loss_hist_axis, result.test_errs['loss_terms'], band_colors=colors,
+                            quantile_band_inds=quant_inds, title=loss_title)
         filename = "%s_%s_%s.png" % (prefix, ("diffs" if show_diffs else "reconstructed"), suffix)
         self._maybe_save_fig(fig, filename)
 
@@ -219,6 +257,7 @@ class SparseExperiment(DenseExperiment):
         ax.hist(errors, bins=100, color='gray', alpha=0.8)
         ax.set_title(title, fontsize=12)
         xlim, ylim = ax.get_xlim(), ax.get_ylim()
+
         def draw_band(ax, band_index, color):
             sample_inds = quantile_band_inds[band_index]
             left, right = np.min(errors[sample_inds]), np.max(errors[sample_inds])
@@ -261,7 +300,7 @@ class SparseExperiment(DenseExperiment):
 
     def get_sparse_terms(self, x_true, x_pred):
         """
-        Calculate the sparsity term based on the encoding of the input images.
+        Calculate the regularization term based on the encoding of the input images.
         """
         z = self.encoder(x_true)
         if self.reg_method.startswith('entropy'):
@@ -270,9 +309,12 @@ class SparseExperiment(DenseExperiment):
             if self.reg_method == 'entropy_sq':
                 # Use the square of the entropy term, for even stronger pressure to be 1 or 0.
                 binary_reg_term = tf.square(binary_reg_term)
-        elif self.reg_method == 'l1':
+        elif self.reg_method == 'L1':
             # Use the L1 norm of the encoded vector, normalized by the number of samples (mean active feature count)
             binary_reg_term = tf.reduce_mean(z, axis=1)
+        elif self.reg_method == 'L1_sq':
+            # Use the L1 norm of the encoded vector, normalized by the number of samples (mean active feature count)
+            binary_reg_term = tf.reduce_mean(z, axis=1)**.5
         elif self.reg_method is None:
             return tf.zeros(shape=(x_true.shape[0],), dtype=tf.float32)
         else:
@@ -294,8 +336,7 @@ class SparseExperiment(DenseExperiment):
         This is called after trainingon CONTINUOUS (if the option is used), to evaluate the
           model on the test set with BINARIZED codes.
         """
-        test_samples_per_digit = self.get_test_samples_by_class(1000)
-        self._stage_result = SparseEvaluation(self, test_samples_per_digit)
+        self._stage_result = SparseEvaluation(self)
         self._order = self._stage_result.order
         return self._stage_result
 
@@ -345,7 +386,7 @@ class SparseExperiment(DenseExperiment):
         # sample the result decoded images
         disp_inds_pd = {digit: np.random.choice(result.encoded_test_by_digit[digit].shape[0],
                                                 n_examples_per_digit, replace=False) for digit in range(10)}
-        x_disp_pd = {digit: result.x_test_per_digit[digit][disp_inds_pd[digit]] for digit in range(10)}
+        x_disp_pd = {digit: result.x_test_by_digit[digit][disp_inds_pd[digit]] for digit in range(10)}
         decoded_pd = {digit: result.decoded_test_by_digit[digit][disp_inds_pd[digit]] for digit in range(10)}
 
         for digit in range(10):
@@ -367,16 +408,16 @@ class SparseExperiment(DenseExperiment):
     def _subplot_sparsity(self, ax, result):
         """
         Plot the sparsity of the encoded vectors.
-        """ 
+        """
         digit_stats = []
 
         for digit in range(10):
             digit_stats.append(np.sum(result.encoded_test_by_digit[digit], axis=1) -
-                               result.n_codebits_always_on)  # Mean sparsity per sample
+                               result.test_errs['n_codebits_always_on'])  # Mean sparsity per sample
         ax.clear()
-
+        code_size = result.encoded_test_by_digit[0].shape[1]
         ax.set_title("Sparsity (code_units=%i, non-constant=%i), bits to encode each digit:" %
-                     (len(result.encoded_test_by_digit[0][0]), result.n_codebits_used), fontsize=11)
+                     (code_size, result.test_errs['n_codebits_used']), fontsize=11)
         sns.boxplot(data=digit_stats, ax=ax)
 
         # turn off x axis
@@ -387,7 +428,7 @@ class SparseExperiment(DenseExperiment):
         """
         Plot the reconstruction error (MSE) for each digit class.
         """
-        truth_per_digit = result.x_test_per_digit
+        truth_per_digit = result.x_test_by_digit
         decoded_per_digit = result.decoded_test_by_digit
         mse_per_digit = []
         n_test_samples = []
@@ -396,13 +437,12 @@ class SparseExperiment(DenseExperiment):
             mse_per_digit.append(mse)
             n_test_samples.append(mse.size)
 
-
         ax.clear()
         ax.set_title("Reconstruction Error (MSE per digit), N = %i" % int(np.mean(n_test_samples)))
         sns.boxplot(data=mse_per_digit, ax=ax)
         # ax.set_xlabel("MSE")
 
-    def get_test_samples_by_class(self, n_per_digit):
+    def get_test_samples_by_class(self, n_per_digit=None):
         """
         Get a fixed number of test samples for each digit class.
         """
@@ -411,7 +451,7 @@ class SparseExperiment(DenseExperiment):
         samples = {}
         for digit in range(10):
             digit_samples = x_test[y_test == digit]
-            if len(digit_samples) > n_per_digit:
+            if n_per_digit is not None and len(digit_samples) > n_per_digit:
                 sample_inds = np.random.choice(digit_samples.shape[0], n_per_digit, replace=False)
                 digit_samples = digit_samples[sample_inds]
             samples[digit] = digit_samples
@@ -434,22 +474,22 @@ class SparseExperiment(DenseExperiment):
         code_counts = np.sum(code_arr, axis=0)
         code_order = np.argsort(code_counts)[::-1]
         code_size = code_arr.shape[1]
-        n_samples = code_arr.shape[0]
 
         # Pare down to just the samples to display:
-        code_arr = np.concatenate([result.encoded_test_by_digit[digit][:n_per_row, code_order] for digit in range(10)], axis=0)
-        n_disp_samples = code_arr.shape[0]
-
+        code_arr = np.concatenate([result.encoded_test_by_digit[digit][:n_per_row, code_order]
+                                  for digit in range(10)], axis=0)
+        n_display_samples = n_per_row * 10
+        n_samples = code_arr.shape[0]   
         # Plot the image
-        n_disp_offset = n_disp_samples//20
+        n_disp_offset = n_display_samples//20
         ax.imshow(code_arr, aspect='auto', cmap='gray', interpolation='none',
-                  extent=(0, code_size, -n_disp_offset, n_disp_samples-n_disp_offset))
+                  extent=(0, code_size, -n_disp_offset, n_display_samples-n_disp_offset))
         title = ("Binary Encoding of %i bits, evaluated on %i test samples\n" % (code_size, n_samples)) +\
-            ("Units used: %i, always On: %i, always Off: %i  (of  %i)\nUnique Samples: %i  (of %i)" % (result.n_codebits_used,
-                                                                                                       result.n_codebits_always_on,
-                                                                                                       result.n_codebits_always_off,
+            ("Units used: %i, always On: %i, always Off: %i  (of  %i)\nUnique Samples: %i  (of %i)" % (result.test_errs['n_codebits_used'],
+                                                                                                       result.test_errs['n_codebits_always_on'],
+                                                                                                       result.test_errs['n_codebits_always_off'],
                                                                                                        code_size,
-                                                                                                       result.n_unique_samples,
+                                                                                                       result.test_errs['n_unique_samples'],
                                                                                                        n_samples))
         ax.set_title(title)
         ax.set_xlabel("Code Bits")
@@ -457,7 +497,7 @@ class SparseExperiment(DenseExperiment):
 
         # make the y-axis show the digit numbers
         # space evenly, in the middle of each digit's band of samples in the image
-        tick_label_positions = np.linspace(0, n_disp_samples - n_disp_offset*2, 10)
+        tick_label_positions = np.linspace(0, n_display_samples - n_disp_offset*2, 10)
         tick_labels = ["%i" % i for i in range(9, -1, -1)]
 
         ax.set_yticks(tick_label_positions)
@@ -478,12 +518,13 @@ def _get_args():
                         help='Regularization lambda for sparsity (default: 0.1)')
     parser.add_argument('--no_plot', action='store_true',
                         help='If set, saves images instead of showing them interactively')
-    reg_methods = ['entropy', 'entropy_sq', 'l1', 'None']
+    reg_methods = ['entropy', 'entropy_sq', 'L1', 'L1_sq', 'None']
     parser.add_argument('--reg_method', type=str, choices=reg_methods, default='entropy',
                         help='Method for calculating the sparsity (regularization) term (default: entropy)' +
                         " valid options: %s" % ', '.join(reg_methods))
     parser.add_argument('--real_code_activations', action='store_true',
-                        help='If set, the encoding layer will use real-valued activations instead of thresholding (Heavisidew/pseudoderivative) units.  (default: False)')
+                        help='If set, encoding layer units have real-valued activations instead of thresholding (Heavisidew/pseudoderivative) units.  (default: False)' +
+                            'NOTE:  binary codes have tanh units before them (thresholding at 0.0), real-valued activations are sigmoid units. ')
     parsed = parser.parse_args()
 
     if not (0 <= parsed.reg_lambda <= 1):

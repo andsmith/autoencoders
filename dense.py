@@ -17,7 +17,7 @@ class DenseExperiment(object):
     _DEFAULT_ACT_FNS = {'internal': 'relu',
                         'encoding': 'relu'}
 
-    def __init__(self, enc_layers=(64,), n_epochs=25, act_fns=None, save_figs=True):
+    def __init__(self, enc_layers=(64,), n_epochs=25, act_fns=None, save_figs=True, bw_data=False):
         """
         Initialize the Dense Experiment with a specified number of encoding units.
         :param enc_layers: list of layer sizes, final value is the encoding layer size.
@@ -25,6 +25,7 @@ class DenseExperiment(object):
         :param act_fns: Dictionary of activation functions for internal, encoding, and output layers.
                         If None, uses default activation functions.
         :param save_figs: If True, saves plots to files instead of showing them interactively.
+        :param bw_data: If True, binarizes the images to black and white (0 or 1).
         """
         self._n_epochs = n_epochs
         self.enc_layer_desc = enc_layers
@@ -41,7 +42,7 @@ class DenseExperiment(object):
 
         self._d_in = 784  # number of pixels in MNIST images
         self._history_dict = None
-        self._load_data()
+        self._load_data(binarize=bw_data)
         self._init_model()
         logging.info("Experiment initialized:  %s" % self.get_name())
 
@@ -54,6 +55,24 @@ class DenseExperiment(object):
         self.x_test = self.mnist_data.x_test.reshape(-1, self._d_in)
         self.y_train = np.where(self.mnist_data.y_train)[1]
         self.y_test = np.where(self.mnist_data.y_test)[1]
+
+        if False:
+            # Re-cut test/train split.
+            n_test_per_dig = [np.sum(self.y_test == i) for i in range(10)]
+            new_x_train, new_y_train, new_x_test, new_y_test = [], [], [], []
+            for i in range(10):
+                x = np.concatenate((self.x_train[self.y_train == i], self.x_test[self.y_test == i]), axis=0)
+                y = np.ones(x.shape[0], dtype=int) * i
+                test_inds = np.random.choice(x.shape[0], n_test_per_dig[i], replace=False)
+                train_inds = np.setdiff1d(np.arange(x.shape[0]), test_inds)
+                new_x_train.append(x[train_inds])
+                new_y_train.append(y[train_inds])
+                new_x_test.append(x[test_inds])
+                new_y_test.append(y[test_inds])
+            self.x_train = np.concatenate(new_x_train, axis=0)
+            self.y_train = np.concatenate(new_y_train, axis=0)
+            self.x_test = np.concatenate(new_x_test, axis=0)
+            self.y_test = np.concatenate(new_y_test, axis=0)
 
         if binarize:
             self.x_train = (self.x_train > 0.5).astype(np.float32)
