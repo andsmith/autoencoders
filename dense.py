@@ -12,7 +12,7 @@ from argparse import ArgumentParser
 from matplotlib.gridspec import GridSpec
 import json
 
-
+import re
 class DenseExperiment(object):
     _DEFAULT_ACT_FNS = {'internal': 'relu',
                         'encoding': 'relu'}
@@ -189,6 +189,42 @@ class DenseExperiment(object):
                 logging.info("No training history found at %s", hist_path)
         else:
             raise FileNotFoundError(f"Model weights file {full_path} not found.")
+    @staticmethod
+    def parse_filename(filename):
+        """
+        Parse the filename to extract encoding layer sizes and other parameters.
+        :param filename: The filename to parse.
+        :return: A dictionary with parsed parameters.
+        """
+        pattern = r'Dense\((.*?)_encode=(.*?)_internal=(.*?)\)_TrainEpochs=(\d+)\.weights\.h5'
+        match = re.match(pattern, filename)
+        if match:
+            enc_layers = tuple(map(int, match.group(1).split(',')))
+            encoding_act_fn = match.group(2)
+            internal_act_fn = match.group(3)
+            n_epochs = int(match.group(4))
+            return {
+                'enc_layers': enc_layers,
+                'encoding_act_fn': encoding_act_fn,
+                'internal_act_fn': internal_act_fn,
+                'n_epochs': n_epochs
+            }
+        else:
+            raise ValueError(f"Filename {filename} does not match expected format.")
+
+    @staticmethod
+    def from_filename(filename):
+        params = DenseExperiment.parse_filename(filename)
+        network = DenseExperiment(
+            enc_layers=params['enc_layers'],
+            n_epochs=params['n_epochs'],
+            act_fns={
+                'encoding': params['encoding_act_fn'],
+                'internal': params['internal_act_fn']
+            }
+        )
+        network._load_weights(path=os.path.dirname(filename))
+        return network
 
     def _attempt_resume(self):
         try:
@@ -369,7 +405,6 @@ def _get_args():
     parser.add_argument('--no_plot', action='store_true',
                         help='If set, saves images instead of showing them interactively')
     return parser.parse_args()
-
 
 def dense_demo():
     args = _get_args()

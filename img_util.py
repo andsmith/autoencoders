@@ -38,7 +38,9 @@ def make_digit_mosaic(imgs, mosaic_aspect=1.7):
     n_rows = int(np.ceil(len(imgs) / n_cols))
     img_side = 28
     img_flat_size = img_side * img_side
-    img = np.zeros((n_rows*img_side, n_cols*img_side, 3), dtype=np.uint8)
+    n_channels = imgs[0].shape[-1] if imgs[0].ndim == 3 else None
+    img = np.zeros((n_rows*img_side, n_cols*img_side, n_channels), dtype=np.uint8)\
+        if n_channels else np.zeros((n_rows*img_side, n_cols*img_side), dtype=np.uint8)
     for i, im in enumerate(imgs):
         x = i % n_cols
         y = i // n_cols
@@ -48,7 +50,10 @@ def make_digit_mosaic(imgs, mosaic_aspect=1.7):
         elif im.shape == (img_flat_size, 3):
             im = im.reshape((img_side, img_side, 3))
         # try:
-        img[y*img_side:(y+1)*img_side, x*img_side:(x+1)*img_side, :] = im
+        if n_channels is None:
+            img[y*img_side:(y+1)*img_side, x*img_side:(x+1)*img_side] = im
+        else:
+            img[y*img_side:(y+1)*img_side, x*img_side:(x+1)*img_side, :] = im
         # except Exception:
         #    print(f"Error assembling image {i}: {im.shape}")
         #    continue

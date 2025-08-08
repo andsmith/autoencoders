@@ -15,6 +15,7 @@ import cv2
 import logging
 import os
 import json
+import re
 
 
 class VAEModel(keras.Model):
@@ -85,7 +86,7 @@ class VAEModel(keras.Model):
             "kl_loss": self.kl_loss_tracker.result(),
         }
 
-class VAE(object):
+class VAEExperiment(object):
 
     def __init__(self, d_input, ds_hidden, d_latent, reg_lambda=0.01):
         self.d_input = d_input
@@ -134,7 +135,11 @@ class VAE(object):
         self.decoder_output = layers.Dense(self.d_input, activation='sigmoid')(self.dec_hidden[-1])
         self.decoder = keras.Model(self.decoder_input, self.decoder_output, name="decoder")
 
-        return VAEModel(self.encoder, self.decoder, reg_lambda=self.reg_lambda)
+        model= VAEModel(self.encoder, self.decoder, reg_lambda=self.reg_lambda)
+
+        # do some inference to build the model
+        _ = model(self.inputs)
+        return model
 
     @tf.function
     def sampling(self, args):
@@ -200,6 +205,56 @@ class VAE(object):
         ax.set_xlabel('Epochs')
         ax.set_ylabel('Loss')
         ax.legend() 
+    def encode_samples(self, x):
+        """
+        Encode samples using the encoder part of the VAE.
+        """
+        z_mean, z_log_var, z = self.encoder.predict(x)
+        return z
+    def decode_samples(self, z):
+        """
+        Decode samples using the decoder part of the VAE.
+        """
+        return self.decoder.predict(z)
+    
+    @staticmethod
+    def parse_filename(filename):
+        """
+        Parse the filename to extract parameters,e.g.
+        """
+        patterns =[r"VAE\(d_input=(\d+), hidden_layers=([\d_,]*), d_latent=(\d+)\).weights.h5",
+                  r"VAE\(d_input=(\d+), hidden_layers=([\d_,]*), d_latent=(\d+), reg_lambda=([\d\.]+)\).weights.h5"]
+
+        for pattern in patterns:
+            match = re.search(pattern, filename)
+            if match:
+                break
+        if not match:
+            raise ValueError("Filename does not match expected format.")
+        
+        d_input = int(match.group(1))
+        ds_hidden = tuple(int(n) for n in match.group(2).split(',')) if match.group(2) != '' else ()
+        d_latent = int(match.group(3))
+        
+        return {
+            'd_input': d_input,
+            'ds_hidden': ds_hidden,
+            'd_latent': d_latent
+        }       
+    @staticmethod
+    def from_filename(filename):
+        """
+        Create a VAE instance from a filename.
+        """
+        params = VAEExperiment.parse_filename(filename)
+        vae = VAEExperiment(
+            d_input=params['d_input'],
+            ds_hidden=params['ds_hidden'],
+            d_latent=params['d_latent'],
+            reg_lambda=0.01  # Default regularization parameter
+        )
+        vae.load_weights(filename)
+        return vae  
 
 def load_mnist():
     (x_train, y_train), (x_test, y_test) = mnist.load_data()
@@ -230,7 +285,7 @@ def test_vae(params=None):
     batch_size = params['batch_size']
     reg_lambda = params['reg_lambda']
 
-    vae = VAE(d_input, ds_hidden, d_latent, reg_lambda=reg_lambda)
+    vae = VAEExperiment(d_input, ds_hidden, d_latent, reg_lambda=reg_lambda)
 
     # Create dummy data
     (x_train, y_train), (x_test, y_test) = load_mnist()
@@ -357,7 +412,7 @@ def test_vae(params=None):
 
     columns = [comp[0] for comp in comparisons]
     columns = np.concatenate(columns, axis=1)
-    n_sample_dims = 6
+    n_sample_dims = min(6, d_latent)
     sample_dimensions = np.random.choice(range(d_latent), size=n_sample_dims, replace=False)
     codes = [comp[1] for comp in comparisons]
     code_image = make_dimension_dist_image(codes, sample_dimensions)
@@ -381,11 +436,11 @@ def test_vae(params=None):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     test_vae(params=dict(
-        d_hidden=(512,),  # Hidden layer(s)' size(s)
-        d_latent=16,   # Latent space size
-        n_epochs=100,   # Number of epochs to train
-        batch_size=8192,  # Batch size for training
-        reg_lambda=0.0,  # Regularization parameter
+        d_hidden=(128, 512),  # Hidden layer(s)' size(s)
+        d_latent=2,   # Latent space size
+        n_epochs=200,   # Number of epochs to train
+        batch_size=512,  # Batch size for training
+        reg_lambda=0.005,  # Regularization parameter
     ))
 
     logging.info("VAE training completed.")
