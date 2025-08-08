@@ -1,12 +1,20 @@
 from dense import DenseExperiment
-from vae import VAEExperiment, load_mnist
+from vae import VAEExperiment
 from img_util import make_digit_mosaic
 import numpy as np
 import matplotlib.pyplot as plt
 import logging
 
+
+def load_mnist():
+    from keras.datasets import mnist
+    (x_train, y_train), (x_test, y_test) = mnist.load_data()
+    x_train = x_train.reshape((x_train.shape[0], -1)) / 255.0
+    x_test = x_test.reshape((x_test.shape[0], -1)) / 255.0
+    return (x_train, y_train), (x_test, y_test)
+
 def test_vae_from_filename():
-    filename="VAE(d_input=784, hidden_layers=, d_latent=64, reg_lambda=0.00).weights.h5"
+    filename="VAE(d_input=784, hidden_layers=128_512, d_latent=2).weights.h5"
 
     net= VAEExperiment.from_filename(filename)
     logging.info("Loaded VAEExperiment from filename: %s", filename)

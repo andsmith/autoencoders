@@ -16,6 +16,7 @@ import logging
 import os
 import json
 import re
+from dense import DenseExperiment
 
 
 class VAEModel(keras.Model):
@@ -47,7 +48,7 @@ class VAEModel(keras.Model):
         return reconstruction
 
     def test_step(self, data):
-        total_loss, reconstruction_loss, kl_loss = self.get_losses(data[0])
+        total_loss, reconstruction_loss, kl_loss = self.get_losses(data)
         self.total_loss_tracker.update_state(total_loss)
         self.reconstruction_loss_tracker.update_state(reconstruction_loss)
         self.kl_loss_tracker.update_state(kl_loss)
@@ -58,10 +59,10 @@ class VAEModel(keras.Model):
         }
 
     def get_losses(self, data):
-        z_mean, z_log_var, z = self.encoder(data)
+        z_mean, z_log_var, z = self.encoder(data[0])
         reconstruction = self.decoder(z)
         reconstruction_loss = tf.reduce_mean(
-            keras.losses.binary_crossentropy(data, reconstruction)
+            keras.losses.binary_crossentropy(data[0], reconstruction)
         )
         if self.reg_lambda == 0:
             # If no regularization, return only reconstruction loss
@@ -86,14 +87,15 @@ class VAEModel(keras.Model):
             "kl_loss": self.kl_loss_tracker.result(),
         }
 
-class VAEExperiment(object):
+class VAEExperiment(DenseExperiment):
 
-    def __init__(self, d_input, ds_hidden, d_latent, reg_lambda=0.01):
-        self.d_input = d_input
-        self.ds_hidden = ds_hidden
-        self.d_latent = d_latent
+    def __init__(self, enc_layers = (64,), d_latent = 16, reg_lambda=0.01):
+        self._d_in = 784
+        self.enc_layer_desc = enc_layers
+        self.code_size = d_latent
+        self._save_figs = None
         self.reg_lambda = reg_lambda
-        self.history = {
+        self._history_dict = {
             "loss": [],
             "reconstruction_loss": [],
             "kl_loss": [],
@@ -101,38 +103,47 @@ class VAEExperiment(object):
             "val_reconstruction_loss": [],
             "val_kl_loss": [],
         }
-
-        self._model = self._init_model()
+        self._load_data()
+        self.autoencoder = self._init_model()
         # compile the model
         # <--- Pass the internally defined optimizer
-        self._model.compile(optimizer=self._model.optimizer_vae, loss=tf.keras.losses.MeanSquaredError())
+        self.autoencoder.compile(optimizer=self.autoencoder.optimizer_vae, loss=tf.keras.losses.MeanSquaredError())
 
-    def get_name(self):
-        hidden_layer_st = "_".join(str(n) for n in self.ds_hidden)
-        return "VAE(d_input=%i, hidden_layers=%s, d_latent=%i)" % (self.d_input, hidden_layer_st, self.d_latent)
+        logging.info("Initialized VAEExperiment with input size %i, hidden layers %s, latent size %i, reg_lambda %.3f",
+                     self._d_in, self.enc_layer_desc, self.code_size, self.reg_lambda)
+        self.print_model_architecture(self.encoder, self.decoder, self.autoencoder)
+
+    def get_name(self, file_ext=None):
+        hidden_layer_st = "_".join(str(n) for n in self.enc_layer_desc)
+        name = "VAE(d_input=%i, hidden_layers=%s, d_latent=%i)" % (self._d_in, hidden_layer_st, self.code_size)
+        if file_ext=='weights':
+            name += ".weights.h5"
+        elif file_ext=='history':
+            name += ".history.json"
+        return name
 
     def _init_model(self):
         # Encoder
-        self.inputs = keras.Input(shape=(self.d_input,))
+        self.inputs = keras.Input(shape=(self._d_in,))
         self.enc_hidden = [self.inputs]
-        for enc_layer, n_hidden in enumerate(self.ds_hidden):
-            activation = 'relu' if enc_layer < len(self.ds_hidden) - 1 else 'sigmoid'
+        for enc_layer, n_hidden in enumerate(self.enc_layer_desc):
+            activation = 'relu' if enc_layer < len(self.enc_layer_desc) - 1 else 'sigmoid'
             hidden_layer = layers.Dense(n_hidden, activation=activation)(self.enc_hidden[-1])
             self.enc_hidden.append(hidden_layer)
-        self.z_mean = layers.Dense(self.d_latent)(self.enc_hidden[-1])
-        self.z_log_var = layers.Dense(self.d_latent)(self.enc_hidden[-1])
-        self.z = layers.Lambda(self.sampling, output_shape=(self.d_latent,), name='z')([self.z_mean, self.z_log_var])
+        self.z_mean = layers.Dense(self.code_size)(self.enc_hidden[-1])
+        self.z_log_var = layers.Dense(self.code_size)(self.enc_hidden[-1])
+        self.z = layers.Lambda(self.sampling, output_shape=(self.code_size,), name='z')([self.z_mean, self.z_log_var])
         self.encoder = keras.Model(self.inputs, [self.z_mean, self.z_log_var, self.z], name="encoder")
 
         # Instantiate the encoder and decoder models
-        self.decoder_input = keras.Input(shape=(self.d_latent,))
+        self.decoder_input = keras.Input(shape=(self.code_size,))
         self.dec_hidden = [self.decoder_input]
-        for n_hidden in reversed(self.ds_hidden):
+        for n_hidden in reversed(self.enc_layer_desc):
             hidden_layer = layers.Dense(n_hidden, activation='relu')(self.dec_hidden[-1])
             self.dec_hidden.append(hidden_layer)
         # Decoder output
 
-        self.decoder_output = layers.Dense(self.d_input, activation='sigmoid')(self.dec_hidden[-1])
+        self.decoder_output = layers.Dense(self._d_in, activation='sigmoid')(self.dec_hidden[-1])
         self.decoder = keras.Model(self.decoder_input, self.decoder_output, name="decoder")
 
         model= VAEModel(self.encoder, self.decoder, reg_lambda=self.reg_lambda)
@@ -154,39 +165,53 @@ class VAEExperiment(object):
         Save the training history to a JSON file.
         """
         with open(filename, 'w') as f:
-            json.dump(self.history, f)
+            json.dump(self._history_dict, f)
 
     def load_history(self, filename):
         """
         Load the training history from a JSON file.
         """
         with open(filename, 'r') as f:
-            self.history = json.load(f)
+            self._history_dict = json.load(f)
 
     def fit(self, x, epochs=50, batch_size=256, validation_data=None):
         """
         Fit the VAE model to the data.
         """
-        history = self._model.fit(
+        history = self.autoencoder.fit(
             x,
             epochs=epochs,
             batch_size=batch_size,
             validation_data=validation_data
         ).history
         
-        self.history['loss'].extend(history['loss'])
-        self.history['reconstruction_loss'].extend(history['reconstruction_loss'])   
-        self.history['kl_loss'].extend(history['kl_loss'])
-        self.history['val_loss'].extend(history['val_loss'])
-        self.history['val_reconstruction_loss'].extend(history['val_reconstruction_loss'])
-        self.history['val_kl_loss'].extend(history['val_kl_loss'])
+        self._history_dict['loss'].extend(history['loss'])
+        self._history_dict['reconstruction_loss'].extend(history['reconstruction_loss'])   
+        self._history_dict['kl_loss'].extend(history['kl_loss'])
+        self._history_dict['val_loss'].extend(history['val_loss'])
+        self._history_dict['val_reconstruction_loss'].extend(history['val_reconstruction_loss'])
+        self._history_dict['val_kl_loss'].extend(history['val_kl_loss'])
 
     def predict(self, x):
-        return self._model(x)
-    def save_weights(self, filename):
-        self._model.save_weights(filename)
-    def load_weights(self, filename):
-        self._model.load_weights(filename)
+        return self.autoencoder(x)
+    def save_weights(self, filename=None):
+
+        filename = self.get_name(file_ext='weights') if filename is None else filename
+        self.autoencoder.save_weights(filename)
+        logging.info("Saved model weights to %s", filename)
+        hist_filename = self.get_name(file_ext='history')
+        with open(hist_filename, 'w') as f:
+            json.dump(self._history_dict, f)
+        logging.info("Saved model history to %s", hist_filename)
+        
+    def load_weights(self, filename=None):
+        filename =  self.get_name(file_ext='weights') if filename is None else filename
+        self.autoencoder.load_weights(filename)
+        logging.info("Loaded model weights from %s", filename)
+        hist_filename = self.get_name(file_ext='history')
+        with open(hist_filename, 'r') as f:
+            self._history_dict = json.load(f)
+        logging.info("Loaded model history from %s", hist_filename)
 
     def plot_history(self,ax=None):
         """
@@ -194,13 +219,13 @@ class VAEExperiment(object):
         """
         if ax is None:
             fig, ax = plt.subplots(figsize=(10, 6))
-        ax.plot(self.history['loss'], label='Loss')
-        ax.plot(self.history['reconstruction_loss'], label='Reconstruction Loss')
-        ax.plot(self.history['kl_loss'], label='KL Loss')
-        if 'val_loss' in self.history:
-            ax.plot(self.history['val_loss'], label='Validation Loss')
-            ax.plot(self.history['val_reconstruction_loss'], label='Validation Reconstruction Loss')
-            ax.plot(self.history['val_kl_loss'], label='Validation KL Loss')
+        ax.plot(self._history_dict['loss'], label='Loss')
+        ax.plot(self._history_dict['reconstruction_loss'], label='Reconstruction Loss')
+        ax.plot(self._history_dict['kl_loss'], label='KL Loss')
+        if 'val_loss' in self._history_dict:
+            ax.plot(self._history_dict['val_loss'], label='Validation Loss')
+            ax.plot(self._history_dict['val_reconstruction_loss'], label='Validation Reconstruction Loss')
+            ax.plot(self._history_dict['val_kl_loss'], label='Validation KL Loss')
         ax.set_title('VAE Training History')
         ax.set_xlabel('Epochs')
         ax.set_ylabel('Loss')
@@ -248,13 +273,36 @@ class VAEExperiment(object):
         """
         params = VAEExperiment.parse_filename(filename)
         vae = VAEExperiment(
-            d_input=params['d_input'],
-            ds_hidden=params['ds_hidden'],
+            enc_layers=params['ds_hidden'],
             d_latent=params['d_latent'],
             reg_lambda=0.01  # Default regularization parameter
         )
         vae.load_weights(filename)
         return vae  
+    
+    def run_staged_experiment(self, n_stages=10, n_epochs=25, save_figs=True):
+        """
+        Run a staged experiment, training the VAE in stages.
+        """
+        self._save_figs = save_figs
+
+        if not self._attempt_resume():
+            logging.info("Training 1 epoch to show loss function terms.")
+            self.train_more(n_epochs=1, save_wts=False)
+        logging.info("***************************")
+        logging.info("Starting %i stages of training %i epochs each.", n_stages, n_epochs)
+
+        for stage in range(n_stages):
+            self._stage = stage
+            logging.info("Running stage %i of %i", stage + 1, n_stages)
+            result = self.train_more(n_epochs=n_epochs, save_wts=True)
+            self._plot_history()
+            self.plot_digit_comparison()
+            self.plot_encoding_distributions()
+            
+            if not self._save_figs:  # plots save figures if they need to be saved
+                plt.tight_layout()
+                plt.show()
 
 def load_mnist():
     (x_train, y_train), (x_test, y_test) = mnist.load_data()
@@ -433,14 +481,23 @@ def test_vae(params=None):
     plt.show()
 
 
+
+
+def vae_demo():
+    description = "Run a Variational Autoencoder (VAE) on MNIST digits."
+    extra_args = [dict(name='--reg_lambda', type=float, default=0.01,
+                            help='Regularization parameter for VAE (default: 0.01)'),
+                  dict(name='--d_latent', type=int, default=16,
+                            help='Dimensionality of the latent space (default: 16)')]
+    args = VAEExperiment.get_args(description=description, extra_args=extra_args)
+    ve = VAEExperiment(enc_layers=args.layers,
+                       d_latent=args.d_latent,
+                       reg_lambda=args.reg_lambda)
+    ve.run_staged_experiment(n_stages=args.stages, n_epochs=args.epochs, save_figs=not args.no_plot)
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    test_vae(params=dict(
-        d_hidden=(128, 512),  # Hidden layer(s)' size(s)
-        d_latent=2,   # Latent space size
-        n_epochs=200,   # Number of epochs to train
-        batch_size=512,  # Batch size for training
-        reg_lambda=0.005,  # Regularization parameter
-    ))
+    vae_demo()
 
     logging.info("VAE training completed.")

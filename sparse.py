@@ -46,11 +46,11 @@ class SparseEvaluation(object):
         thresh_str = ("%.2f" % self.code_thresh) if self.code_thresh is not None else '(not binarized)'
 
         logging.info("Encoding/decoding test set (%i samples) with threshold %s", x_test.shape[0], thresh_str)
-        self.encoded_test_mat = self.experiment.encode_samples(x_test, binarize_thresh=self.code_thresh)
+        self.encoded_test_mat = self.experiment.encode_samples(x_test, binarize=True)
         self.decoded_test_mat = self.experiment.decode_samples(self.encoded_test_mat)
 
         logging.info("Encoding/decoding training set (%i samples) with threshold %s", x_train.shape[0], thresh_str)
-        self.encoded_train_mat = self.experiment.encode_samples(x_train, binarize_thresh=self.code_thresh)
+        self.encoded_train_mat = self.experiment.encode_samples(x_train, binarize=True)
         self.decoded_train_mat = self.experiment.decode_samples(self.encoded_train_mat)
 
         # sorting test data by digit is helpful for plotting
@@ -122,7 +122,7 @@ class SparseExperiment(DenseExperiment):
         'internal': 'relu',
     }
 
-    def __init__(self, enc_layers=(64,), n_epochs=25, act_fns=None, reg_lambda=0.5, save_figs=True,
+    def __init__(self, enc_layers=(64,), act_fns=None, reg_lambda=0.5, 
                  reg_method='none', binarize_code_units=None):
         activation_functions = self._DEFAULT_ACT_FNS.copy() if act_fns is None else act_fns
         self.reg_lambda = reg_lambda
@@ -132,11 +132,10 @@ class SparseExperiment(DenseExperiment):
             activation_functions['binarize_code_units'] = binarize_code_units
 
         activation_functions['encoding'] = 'sigmoid'
-
-        super().__init__(enc_layers=enc_layers, n_epochs=n_epochs, act_fns=activation_functions, save_figs=save_figs)
-
         self.code_thresh = {'sigmoid': 0.5,
-                            'tanh': 0.0}[self.act_fns['encoding']]
+                            'tanh': 0.0}[activation_functions['encoding']]
+        super().__init__(enc_layers=enc_layers, act_fns=activation_functions)
+
 
     def _maybe_save_fig(self, fig, filename):
         if hasattr(self, '_save_figs') and self._save_figs:
@@ -149,17 +148,18 @@ class SparseExperiment(DenseExperiment):
         #     plt.show()
         #     return None
 
-    def run_staged_experiment(self, n_stages=5):
+    def run_staged_experiment(self, n_stages=5, n_epochs=25, save_figs=False):
+        self._save_figs = save_figs
+
         if not self._attempt_resume():
             logging.info("Training 1 epoch to show loss function terms.")
             self.train_more(n_epochs=1, save_wts=False)
         logging.info("***************************")
-        logging.info("Starting %i stages of training %i epochs each.", n_stages, self._n_epochs)
+        logging.info("Starting %i stages of training %i epochs each.", n_stages, n_epochs)
         for stage in range(n_stages):
             self._stage = stage
             logging.info("Running stage %i of %i", stage + 1, n_stages)
-            result = self.train_more()
-
+            result = self.train_more(n_epochs=n_epochs, save_wts=True)
             self._plot_history()
             self.plot_distributions(result, show_diffs=False)
             self.plot_distributions(result, show_diffs=True)
@@ -170,7 +170,7 @@ class SparseExperiment(DenseExperiment):
                 plt.show()
 
     def plot_distributions(self, result, show_diffs=False, n_samp=36):
-        prefix = self.get_name(file_ext=False)
+        prefix = self.get_name()
         suffix = "stage_%i" % (self._stage,)
         fig = plt.figure(constrained_layout=True, figsize=(10, 8))
         # show best, worst, and middle 4 quantiles above a histogram
@@ -275,7 +275,7 @@ class SparseExperiment(DenseExperiment):
         encoding_layers.append(encoding)
         return encoding_layers
 
-    def get_name(self, file_ext=False):
+    def get_name(self, file_ext=None):
         def func_to_str(func):
             if hasattr(func, '__name__'):
                 return func.__name__
@@ -286,8 +286,12 @@ class SparseExperiment(DenseExperiment):
         reg_str = "reg=%s" % self.reg_method
         fname = ("Sparse(%s%s_%s_regL=%.3f)" %
                  (desc_str, bin_str, reg_str, self.reg_lambda))
-        if file_ext:
+        if file_ext=='weights':
             fname += ".weights.h5"
+        elif file_ext=='history':
+            fname += ".history.json"
+        elif file_ext is not None:
+            raise ValueError("Unknown file extension: %s" % file_ext)
         return fname
 
     def get_mse_terms(self, x_true, x_pred):
@@ -314,13 +318,11 @@ class SparseExperiment(DenseExperiment):
             raise ValueError("Unknown method for sparse loss: %s" % self.reg_method)
 
         return binary_reg_terms
-    
-    
+
     def sparse_loss(self, x_true, x_pred):
         mse_loss = tf.reduce_mean(self.get_mse_terms(x_true, x_pred))
-        #import ipdb; ipdb.set_trace()
         if self.reg_method != 'none':
-            binary_reg_term = tf.reduce_mean(self.get_regularization_terms(x_true, x_pred)) 
+            binary_reg_term = tf.reduce_mean(self.get_regularization_terms(x_true, x_pred))
         else:
             binary_reg_term = 0.0
 
@@ -328,6 +330,27 @@ class SparseExperiment(DenseExperiment):
 
     def _get_loss_fn(self):
         return self.sparse_loss
+    
+    def encode_samples(self, samples, binarize=True):
+        """
+        Encode samples into the latent space, optionally binarizing the output.
+        :param samples: array of shape (n_samples, d_input)
+        :param binarize: threshold for binarization, if None, no binarization is applied.
+        :return: array of shape (n_samples, d_latent)
+        """
+        encoded = self.encoder(samples).numpy()
+        if binarize is not None:
+            encoded = (encoded > self.code_thresh)
+        return encoded
+    
+    def decode_samples(self, codes):
+        """
+        Decode samples from the latent space.
+        :param codes: array of shape (n_samples, d_latent)
+        :return: array of shape (n_samples, d_input)
+        """
+        decoded = self.decoder(codes).numpy()
+        return decoded
 
     def _eval(self):
         """
@@ -371,7 +394,7 @@ class SparseExperiment(DenseExperiment):
     def _subplot_reconstructions(self, original_ax, reconstructed_ax, result, n_examples_per_digit=33):
         """
         Plot the original and reconstructed digits side by side.
-        Left plot is original images, 
+        Left plot is original images,
         """
         original_imgs = []
         reconstructed_imgs = []
@@ -505,52 +528,46 @@ class SparseExperiment(DenseExperiment):
         filename = "%s_codes_%s.png" % (self.get_name(), self._stage)
         self._maybe_save_fig(fig, filename)
 
+    @staticmethod
+    def get_args():
+        description = "Run a sparse autoencoder on MNIST digits"
+        reg_methods = ['none', 'entropy', 'L1']
+        extra_args = [dict(name='--reg_lambda', type=float, default=0.1,
+                           help='Regularization lambda for sparsity (default: 0.1)'),
+                      dict(name='--reg_method', type=str, choices=reg_methods, default='none',
+                           help='Method for calculating the binary/sparsity (regularization) term (default: none)' +
+                           " valid options: %s," % ', '.join(reg_methods) +
+                           " NOTE: Using the ENTROPY method calculates the regularization term on the pre-binarized layer of the encoder (layer[-2])" +
+                           " if using binary codes, or encoder outputs directly if using real-valued codes (the final layer, layer[-1])"),
+                      dict(name='--real_code_activations', action='store_true',
+                           help='Codes (output of encoder layer) are real-valued vectors instead of binary.' +
+                           'NOTE: this removes the Heaviside pass-through units from the end of the encoder ')]
+        parsed = super(SparseExperiment, SparseExperiment).get_args(description=description, extra_args=extra_args)
 
-def _get_args():
-    parser = ArgumentParser(description="Run a sparse autoencoder experiment.")
-    parser.add_argument('--layers', type=int, nargs='+', default=[128, 256],
-                        help='List of encoding layer sizes (default: [128, 256])')
-    parser.add_argument('--epochs', type=int, default=100,
-                        help='Number of epochs to train each stage (default: 100)')
-    parser.add_argument('--stages', type=int, default=5,
-                        help='Number of training stages (default: 5)')
-    parser.add_argument('--reg_lambda', type=float, default=0.1,
-                        help='Regularization lambda for sparsity (default: 0.1)')
-    parser.add_argument('--no_plot', action='store_true',
-                        help='If set, saves images instead of showing them interactively')
-    reg_methods = ['entropy', 'L1', 'none']
-    parser.add_argument('--reg_method', type=str, choices=reg_methods, default='none',
-                        help='Method for calculating the binary/sparsity (regularization) term (default: none)' +
-                             " valid options: %s," % ', '.join(reg_methods) +
-                             " NOTE: Using the ENTROPY method calculates the regularization term on the pre-binarized layer of the encoder (layer[-2])" +
-                             " if using binary codes, or encoder outputs directly if using real-valued codes (the final layer, layer[-1])")
-    parser.add_argument('--real_code_activations', action='store_true',
-                        help='Codes (output of encoder layer) are real-valued vectors instead of binary.' +
-                             'NOTE: this removes the Heaviside pass-through units from the end of the encoder ')
-    parsed = parser.parse_args()
+        def check_lambda(reg_lambda, which):
+            if not (0 <= reg_lambda <= 1):
+                raise ValueError("Invalid value for --%s: %f (must be between 0 and 1)" % (which, reg_lambda))
 
-    def check_lambda(reg_lambda, which):
-        if not (0 <= reg_lambda <= 1):
-            parser.error("Invalid value for --%s: %f (must be between 0 and 1)" % (which, reg_lambda))
+        parsed.reg_method = parsed.reg_method.lower()
 
-    parsed.reg_method = parsed.reg_method.lower()
+        if parsed.reg_method != 'none':
+            check_lambda(parsed.reg_lambda, "reg_lambda")
+        else:
+            parsed.reg_lambda = 0.0
 
-    if parsed.reg_method != 'none':
-        check_lambda(parsed.reg_lambda, "reg_lambda")
-    else:
-        parsed.reg_lambda = 0.0
+        return parsed
+    
 
-
-    return parsed
 
 
 def sparse_demo():
-    args = _get_args()
+    args = SparseExperiment.get_args()
     logging.info("Running Sparse Autoencoder with args: %s", args)
-    se = SparseExperiment(enc_layers=args.layers, n_epochs=args.epochs,
-                          reg_lambda=args.reg_lambda, save_figs=args.no_plot,
-                          reg_method=args.reg_method, binarize_code_units=not args.real_code_activations)
-    se.run_staged_experiment(n_stages=args.stages)
+    se = SparseExperiment(enc_layers=args.layers,
+                           reg_lambda=args.reg_lambda,
+                             reg_method=args.reg_method,
+                               binarize_code_units=not args.real_code_activations)
+    se.run_staged_experiment(n_stages=args.stages, save_figs=args.no_plot, n_epochs=args.epochs)
 
 
 if __name__ == "__main__":
