@@ -27,12 +27,14 @@ class Embedding(ABC):
     Calculated embeddings will map all initial points so they fill the unit square.
     """
 
-    def __init__(self, points):
+    def __init__(self, points, class_labels=None):
         """
         Initialize the embedding with a set of points.
         :param points: array of shape (n_samples, n_features), points in feature space.
+        :param class_labels: optional array of shape (n_samples,), int in range 0 -- n_classes-1.
         """
         self.points = points
+        self.class_labels = class_labels
         points_2d_unscaled = self._calc_embedding()
         self.scale = self._calc_scale(points_2d_unscaled)
         self.points_2d = self._scale_points(points_2d_unscaled)
@@ -103,6 +105,29 @@ class Embedding(ABC):
         path = start + t[:, np.newaxis] * (endpoint - start)
         return self.embed_points(path), path
 
+    def scale_to_bbox(self, points, bbox, img_size_wh=None):
+        """
+        "Zoom-in" on the points so the bounding box is mapped to the unit square, or
+        an image's pixel space.
+        :param points: array of shape (n_samples, 2), points in the embedding space
+        :param bbox: bounding box in the embedding space, dict with 'x' and 'y' keys
+                    each containing a tuple (min, max)
+        :param img_size_wh: optional size of the image to map to (width, height)
+        :returns: float array, shape (n_samples, 2), scaled points in the target space
+        """
+        if img_size_wh is not None:
+            # Map to image pixel space
+            scale_x = img_size_wh[0] / (bbox['x'][1] - bbox['x'][0])
+            scale_y = img_size_wh[1] / (bbox['y'][1] - bbox['y'][0])
+        else:
+            # Map to unit square
+            scale_x = 1.0 / (bbox['x'][1] - bbox['x'][0])
+            scale_y = 1.0 / (bbox['y'][1] - bbox['y'][0])
+        points = points.reshape(-1, 2)
+        scaled_points = np.zeros_like(points).reshape(-1, 2)
+        scaled_points[:, 0] = (points[:, 0] - bbox['x'][0]) * scale_x
+        scaled_points[:, 1] = (points[:, 1] - bbox['y'][0]) * scale_y
+        return scaled_points
 
 class PassThroughEmbedding(Embedding):
     """

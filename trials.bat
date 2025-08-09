@@ -1,15 +1,15 @@
-# 2-layer
-python .\sparse.py --layers  64 1024 --epochs 100 --stages 10  --no_plot --reg_lambda .01 --reg_method entropy
-python .\sparse.py --layers  64 2048 --epochs 100 --stages 10  --no_plot --reg_lambda .01 --reg_method entropy
-python .\sparse.py --layers  64 4096 --epochs 100 --stages 10  --no_plot --reg_lambda .01 --reg_method entropy
 
-python .\sparse.py --layers  64 1024 --epochs 100 --stages 10  --no_plot --reg_lambda .01
-python .\sparse.py --layers 128 1024 --epochs 100 --stages 10  --no_plot --reg_lambda .01
-python .\sparse.py --layers 256 1024 --epochs 100 --stages 10  --no_plot --reg_lambda .01
-python .\sparse.py --layers 512 1024 --epochs 100 --stages 10  --no_plot --reg_lambda .01
+python .\vae.py --layers 126 512 --d_latent 4 --reg_lambda 0.001 --stages 1 --epochs 500 --no_plot
+python .\vae.py --layers 126 512 --d_latent 8 --reg_lambda 0.001 --stages 1 --epochs 500 --no_plot
+python .\vae.py --layers 126 512 --d_latent 16 --reg_lambda 0.001 --stages 1 --epochs 500 --no_plot
+python .\vae.py --layers 126 512 --d_latent 32 --reg_lambda 0.001 --stages 1 --epochs 500 --no_plot
 
-python .\sparse.py --layers  64 1024 --epochs 100 --stages 10  --no_plot --reg_lambda .01 --reg_method entropy
-python .\sparse.py --layers 128 1024 --epochs 100 --stages 10  --no_plot --reg_lambda .01 --reg_method entropy
-python .\sparse.py --layers 256 1024 --epochs 100 --stages 10  --no_plot --reg_lambda .01 --reg_method entropy
-python .\sparse.py --layers 512 1024 --epochs 100 --stages 10  --no_plot --reg_lambda .01 --reg_method entropy
+python .\vae.py --layers 127 512 --d_latent 4 --reg_lambda 0.005 --stages 1 --epochs 500 --no_plot
+python .\vae.py --layers 127 512 --d_latent 8 --reg_lambda 0.005 --stages 1 --epochs 500 --no_plot
+python .\vae.py --layers 127 512 --d_latent 16 --reg_lambda 0.005 --stages 1 --epochs 500 --no_plot
+python .\vae.py --layers 127 512 --d_latent 32 --reg_lambda 0.005 --stages 1 --epochs 500 --no_plot
 
+python .\vae.py --layers 128 512 --d_latent 4 --reg_lambda 0.01 --stages 1 --epochs 500 --no_plot
+python .\vae.py --layers 128 512 --d_latent 8 --reg_lambda 0.01 --stages 1 --epochs 500 --no_plot
+python .\vae.py --layers 128 512 --d_latent 16 --reg_lambda 0.01 --stages 1 --epochs 500 --no_plot
+python .\vae.py --layers 128 512 --d_latent 32 --reg_lambda 0.01 --stages 1 --epochs 500 --no_plot
