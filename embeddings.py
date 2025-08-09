@@ -23,17 +23,19 @@ import logging
 
 class Embedding(ABC):
     """
-    Find a 2d embedding function for points in a high-dimensional feature space.
+    Find a 2d embedding function for points in a higher-dimensional latent space.
     Calculated embeddings will map all initial points so they fill the unit square.
     """
 
-    def __init__(self, points, class_labels=None):
+    def __init__(self, points, inputs=None, class_labels=None):
         """
         Initialize the embedding with a set of points.
-        :param points: array of shape (n_samples, n_features), points in feature space.
+        :param points: array of shape (n_samples, n_features), points in latent space.
+
         :param class_labels: optional array of shape (n_samples,), int in range 0 -- n_classes-1.
         """
         self.points = points
+        self.inputs = inputs
         self.class_labels = class_labels
         points_2d_unscaled = self._calc_embedding()
         self.scale = self._calc_scale(points_2d_unscaled)
@@ -73,11 +75,11 @@ class Embedding(ABC):
         Interpolate a path between two points in the embedding space & compute the
         corresponding embedded path.
 
-        :param start: starting point in the feature space
-        :param end: ending point in the feature space
+        :param start: starting point in the latent space
+        :param end: ending point in the latent space
         :param n_points: number of points to interpolate
         :return: array of shape (n_points, 2), embedded points along the path in the embedding space
-                 array of shape (n_points, n_features), points along the path in feature space
+                 array of shape (n_points, n_features), points along the path in latent space
         """
         t = np.linspace(0, 1, n_points)
         path = start + t[:, np.newaxis] * (end - start)
@@ -90,7 +92,7 @@ class Embedding(ABC):
         Add the vector to the starting point, and extend it by the length factor.
         Sample n_points on this line, find embedded locations.
 
-        :param start: starting point in the feature space
+        :param start: starting point in the latent space
 
         :param vec: vector to extrapolate in
         :param n_points: number of points to sample along the extrapolated line
@@ -132,7 +134,7 @@ class Embedding(ABC):
 class PassThroughEmbedding(Embedding):
     """
     A trivial embedding that does not change the points, uses first two dimensions
-    of feature space as the 2d embedding.
+    of latent space as the 2d embedding.
     Useful for testing and debugging.
     """
 

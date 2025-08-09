@@ -105,15 +105,15 @@ class MNISTEmbedRenderer(EmbeddingRenderer):
     Renderer for MNIST digits, using the embedding of the digits.
     """
 
-    def __init__(self, embedder, x_train):
-        icons = MNISTIcon.icons_from_data(x_train, embedder.points, embedder.points_2d, embedder.class_labels)
+    def __init__(self, embedder):
+        icons = MNISTIcon.icons_from_data(embedder.inputs, embedder.points, embedder.points_2d, embedder.class_labels)
         super().__init__(embedder, icons)
         self._embed_locs = np.array([icon.x_embedded for icon in icons])
         self._raw_locs = np.array([icon.x_in for icon in icons])
         self._digits = np.array([icon.digit for icon in icons])
         self._images = [icon.image for icon in icons]
 
-    def render_embedding(self, image, view_bbox, keep_visible_icons=False, spread=1.0):
+    def render_embedding(self, image, view_bbox, keep_visible_icons=True, spread=1.0):
         """
         Render the embedding space in the given view bounding box.
         :param image: input image to draw on, or a tuple (width, height)
@@ -222,8 +222,8 @@ def test_embedding_renderer(n_sample=10000):
     y_train = data.y_train[sample_inds]
     labels = np.argmax(y_train, axis=1)
     x_latent = x_train  # For simplicity, use the input as latent space
-    embed = PCAEmbedding(x_latent, class_labels=labels)
-    rend = MNISTEmbedRenderer(embed, x_train)
+    embed = PCAEmbedding(x_latent, class_labels=labels, inputs=x_train)
+    rend = MNISTEmbedRenderer(embed)
 
     def view(img):
         cv2.imshow("Embedding", img)

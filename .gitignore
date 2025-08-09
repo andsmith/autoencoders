@@ -1,6 +1,9 @@
 # Network weight files
 *.h5
-
+*.json
+*.png
+*.tgz
+*.bat
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
