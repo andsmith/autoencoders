@@ -9,12 +9,14 @@ from pca import PCA
 
 from mnist import MNISTData
 import logging
+
+
 class AutoencoderExperiment(ABC):
     """
     Base class for autoencoder experiments.
     """
 
-    def __init__(self, pca_dims, n_train_samples=0, bw_input=False):
+    def __init__(self, pca_dims, n_train_samples=0, bw_input=False, use_pca_cache=True):
         """
         Initialize the AutoencoderExperiment.
         :param pca_dims:
@@ -23,11 +25,11 @@ class AutoencoderExperiment(ABC):
              < 1, fraction of variance
         :param n_train_samples: Number of training samples to use (0 for all 60k).
         """
+        self._use_pca_cache = use_pca_cache
         self.pca = PCA(dims=pca_dims)
         self.n_train_samples = n_train_samples
         self.pca_dims = self._load_data(binarize=bw_input)
         self._init_model()
-
 
     @abstractmethod
     def _init_model(self):
@@ -134,9 +136,9 @@ class AutoencoderExperiment(ABC):
         for arg in (extra_args):
             parser.add_argument(arg['name'], **{k: v for k, v in arg.items() if k != 'name'})
 
-        parsed= parser.parse_args()
+        parsed = parser.parse_args()
 
-        if parsed.pca_dims==0.0:
+        if parsed.pca_dims == 0.0:
             parsed.pca_dims = 0
         elif parsed.pca_dims > 1.0:
             parsed.pca_dims = int(parsed.pca_dims)
@@ -161,11 +163,18 @@ class AutoencoderExperiment(ABC):
         if binarize:
             self.x_train = (self.x_train > 0.5).astype(np.float32)
             self.x_test = (self.x_test > 0.5).astype(np.float32)
-            
 
         # Finally, train PCA layer
-        self.x_train_pca = self.pca.fit_transform(self.x_train)
+        self.x_train_pca = self.pca.fit_transform(self.x_train, use_cache=self._use_pca_cache)
         self.x_test_pca = self.pca.encode(self.x_test)
 
         logging.info("Data loaded: %i training samples, %i test samples", self.x_train.shape[0], self.x_test.shape[0])
         return self.pca.pca_dims
+
+    def _maybe_save_fig(self, fig, filename):
+        if self._save_figs:
+            fig.tight_layout()
+            fig.savefig(filename, bbox_inches='tight')
+            plt.close(fig)
+            logging.info("Figure saved to %s", filename)
+            return filename

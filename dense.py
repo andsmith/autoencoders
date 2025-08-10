@@ -14,6 +14,8 @@ import json
 from experiment import AutoencoderExperiment
 import re
 
+WORKING_DIR = "Dense-results"
+
 
 class DenseExperiment(AutoencoderExperiment):
     _DEFAULT_ACT_FNS = {'internal': 'relu',
@@ -29,7 +31,7 @@ class DenseExperiment(AutoencoderExperiment):
         """
 
         self._history_dict = None
-        if 'history_dict'  in kwargs:
+        if 'history_dict' in kwargs:
             self._history_dict = kwargs['history_dict']
             del kwargs['history_dict']
 
@@ -52,17 +54,26 @@ class DenseExperiment(AutoencoderExperiment):
         if isinstance(self.encoder, Model):
             self.print_model_architecture(self.encoder, self.decoder, self.autoencoder)
 
-    def get_name(self, file_ext=None):
+    def get_name(self, file_ext=None, suffix=None):
         desc_str = "_".join([str(n) for n in self.enc_layer_desc])
-        pca_str = self.pca.get_name()
+        pca_str = "PCA=%i" % self.pca_dims
         fname = ("Dense(%s_units=%s_encode=%s_internal=%s)" %
                  (pca_str, desc_str, self.act_fns['encoding'], self.act_fns['internal']))
+
+        if suffix is not None:
+            fname = "%s_%s" % (fname, suffix)
+
         if file_ext == 'weights':
             fname += ".weights.h5"
+        elif file_ext == 'image':
+            fname += ".png"
         elif file_ext == 'history':
             fname += "history.json"
         elif file_ext is not None:
             raise ValueError("Unknown file extension type: %s" % file_ext)
+
+        if file_ext is not None:
+            return os.path.join(WORKING_DIR, fname)
         return fname
 
     def _init_encoder_layers(self, inputs):
@@ -137,6 +148,7 @@ class DenseExperiment(AutoencoderExperiment):
 
     def save_weights(self, path='.'):
         filename = self.get_name(file_ext='weights')
+
         self.autoencoder.save_weights(filename)
         logging.info("Model weights saved to %s", os.path.join(path, filename))
         # save history
@@ -171,8 +183,9 @@ class DenseExperiment(AutoencoderExperiment):
         :param filename: The filename to parse.
         :return: A dictionary with parsed parameters.
         """
+        file = os.path.split(filename)[1]
         pattern = r'Dense\((.*?)_encode=(.*?)_internal=(.*?)\)\.weights\.h5'
-        match = re.match(pattern, filename)
+        match = re.match(pattern, file)
         if match:
             enc_layers = tuple(map(int, match.group(1).split(',')))
             encoding_act_fn = match.group(2)
@@ -246,9 +259,6 @@ class DenseExperiment(AutoencoderExperiment):
         logging.info("\tMean squared error: %.4f (%.4f)", np.mean(self._mse_errors), np.std(self._mse_errors))
 
     def _plot_history(self):
-        prefix = self.get_name()
-        suffix = "stage_%i" % (self._stage+1)
-        filename = "%s_training_history_%s.png" % (prefix, suffix)
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.plot(self._history_dict['loss'])
         ax.plot(self._history_dict['val_loss'])
@@ -256,13 +266,12 @@ class DenseExperiment(AutoencoderExperiment):
         ax.set_ylabel('Loss')
         ax.set_xlabel('Epoch')
         ax.legend(['Train', 'Test'], loc='upper right')
+        filename = self.get_name(file_ext='image', suffix="_history")
+
         self._maybe_save_fig(fig, filename)
         return None
 
     def plot(self, n_samp=39, show_diffs=False):
-
-        prefix = self.get_name()
-        suffix = "stage_%i" % (self._stage+1)
 
         def show_mosaic(ax, inds, title, color):
             if not show_diffs:
@@ -297,7 +306,7 @@ class DenseExperiment(AutoencoderExperiment):
             extra = n_samp % 2
             self._quant_inds.append(self._order[ind-n_samp//2:ind+n_samp//2+extra])
         self._quant_inds.append(worst_inds)
-
+        suffix = "stage = %i" % (self._stage,)
         mid_labels = ["sample group %i - %s" % (i, suffix) for i in range(1, n_quantiles-1)]
         q_labels = ['Lowest Test MSE - %s' % suffix] + mid_labels + ['Highest Test MSE - %s' % suffix]
         n_colors = len(q_labels)
@@ -317,15 +326,10 @@ class DenseExperiment(AutoencoderExperiment):
 
         plt.suptitle(title, fontsize=14)
         self._show_err_hist(hist_axis, q_labels, colors)
-        filename = "%s_%s_%s.png" % (prefix, ("diffs" if show_diffs else "reconstructed"), suffix)
+        ds = "differences" if show_diffs else "reconstructions"
+        filename = self.get_name(file_ext='image', suffix="stage=%i_ds=%s" % (self._stage, ds))
         self._maybe_save_fig(fig, filename)
 
-    def _maybe_save_fig(self, fig, filename):
-        if self._save_figs:
-            fig.tight_layout()
-            fig.savefig(filename, bbox_inches='tight')
-            plt.close(fig)
-            return filename
         # else:
         #    plt.show()
         #    return None
@@ -354,6 +358,10 @@ class DenseExperiment(AutoencoderExperiment):
         :param n_epochs: number of epochs to train each stage
         :param save_figs: If True, saves plots to files instead of showing them interactively.
         """
+
+        if not os.path.exists(WORKING_DIR):
+            os.makedirs(WORKING_DIR)
+
         # first round, load weights if available
         self._attempt_resume()
         self._save_figs = save_figs

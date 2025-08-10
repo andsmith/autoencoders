@@ -1,503 +1,591 @@
-# Adapted from response of google AI to prompt "simple 1-layer variational autoencoder in keras"
-# Variational Autoencoder (VAE) implementation using Keras
-import keras
-from keras import layers
-from keras import backend as K
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
-from sympy import comp
-import tensorflow as tf
-from keras.datasets import mnist
 import matplotlib.pyplot as plt
-# import colormaps
-import seaborn as sns
-# Set the style for seaborn
-import cv2
-import logging
 import os
-import json
+import logging
 import re
-from dense import DenseExperiment
+from matplotlib.gridspec import GridSpec
+from colors import COLORS
+from img_util import make_digit_mosaic, make_img,diff_img
+from latent_var_plots import LatentDigitDist
+import time
+from experiment import AutoencoderExperiment
+WORKING_DIR= "VAE-results"
+import cv2
+import pickle
+
+class Encoder(nn.Module):
+    def __init__(self, input_dim, hidden_dims, latent_dim):
+        super().__init__()
+        self.hidden_layers = nn.ModuleList()
+        last_dim = input_dim
+        for layer_size in hidden_dims:
+            self.hidden_layers.append(nn.Linear(last_dim, layer_size))
+            last_dim = layer_size
+        self.fc_mu = nn.Linear(hidden_dims[-1], latent_dim)
+        self.fc_logvar = nn.Linear(hidden_dims[-1], latent_dim)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        for layer in self.hidden_layers:
+            x = self.relu(layer(x))
+        mu = self.fc_mu(x)
+        log_var = self.fc_logvar(x)
+        return mu, log_var
+
+class Decoder(nn.Module):
+    def __init__(self, latent_dim, hidden_dims, output_dim):
+        super().__init__()
+        self.hidden_layers = nn.ModuleList()
+        last_dim = latent_dim
+        for layer_size in hidden_dims:
+            self.hidden_layers.append(nn.Linear(last_dim, layer_size))
+            last_dim = layer_size
+        self.fc3 = nn.Linear(last_dim, output_dim)
+        self.relu = nn.ReLU()
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, z):
+        for layer in self.hidden_layers:
+            z = self.relu(layer(z))
+        recon_x = self.sigmoid(self.fc3(z))
+        return recon_x
+
+class VAE(nn.Module):
+    def __init__(self, input_dim, hidden_dims, latent_dim, output_dim, device, lambda_reg=0.001):
+        super().__init__()
+        self.encoder = Encoder(input_dim, hidden_dims, latent_dim)
+        self.decoder = Decoder(latent_dim, hidden_dims[::-1], output_dim)
+        self.latent_dim = latent_dim
+        self.hidden_dims = hidden_dims
+        self.input_dim = input_dim
+        self.lambda_reg = lambda_reg
+        self.device = device
+
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        z = mu + eps * std
+        return z
+
+    def forward(self, x):
+        mu, log_var = self.encoder(x)
+        z = self.reparameterize(mu, log_var)
+        recon_x = self.decoder(z)
+        return recon_x, mu, log_var
 
 
-class VAEModel(keras.Model):
-
-    def __init__(self, encoder, decoder, reg_lambda, **kwargs):
-        self.reg_lambda = reg_lambda
-        super().__init__(**kwargs)
-        self.encoder = encoder
-        self.decoder = decoder
-        self.total_loss_tracker = keras.metrics.Mean(name="total_loss")
-        self.reconstruction_loss_tracker = keras.metrics.Mean(
-            name="reconstruction_loss"
-        )
-        self.kl_loss_tracker = keras.metrics.Mean(name="kl_loss")
-        # Define the optimizer here if you don't want to pass it to compile
-        self.optimizer_vae = keras.optimizers.Adam()  # <--- Optimizer defined here
-
-    @property
-    def metrics(self):
-        return [
-            self.total_loss_tracker,
-            self.reconstruction_loss_tracker,
-            self.kl_loss_tracker,
-        ]
-
-    def call(self, inputs):  # <--- Added call method
-        _, _, z = self.encoder(inputs)
-        reconstruction = self.decoder(z)
-        return reconstruction
-
-    def test_step(self, data):
-        total_loss, reconstruction_loss, kl_loss = self.get_losses(data)
-        self.total_loss_tracker.update_state(total_loss)
-        self.reconstruction_loss_tracker.update_state(reconstruction_loss)
-        self.kl_loss_tracker.update_state(kl_loss)
-        return {
-            "loss": self.total_loss_tracker.result(),
-            "reconstruction_loss": self.reconstruction_loss_tracker.result(),
-            "kl_loss": self.kl_loss_tracker.result(),
-        }
-
-    def get_losses(self, data):
-        z_mean, z_log_var, z = self.encoder(data[0])
-        reconstruction = self.decoder(z)
-        reconstruction_loss = tf.reduce_mean(
-            keras.losses.binary_crossentropy(data[0], reconstruction)
-        )
-        if self.reg_lambda == 0:
-            # If no regularization, return only reconstruction loss
-            return reconstruction_loss, reconstruction_loss, 0.0
-        kl_loss = -0.5 * (1 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var))
-        kl_loss = tf.reduce_mean(tf.reduce_sum(kl_loss, axis=1))
-        total_loss = reconstruction_loss * (1-self.reg_lambda) + kl_loss * self.reg_lambda
-        return total_loss, reconstruction_loss, kl_loss
-
-    def train_step(self, data):
-        with tf.GradientTape() as tape:
-            total_loss, reconstruction_loss, kl_loss = self.get_losses(data)
-        grads = tape.gradient(total_loss, self.trainable_weights)
-        # <--- Use the internally defined optimizer
-        self.optimizer_vae.apply_gradients(zip(grads, self.trainable_weights))
-        self.total_loss_tracker.update_state(total_loss)
-        self.reconstruction_loss_tracker.update_state(reconstruction_loss)
-        self.kl_loss_tracker.update_state(kl_loss)
-        return {
-            "loss": self.total_loss_tracker.result(),
-            "reconstruction_loss": self.reconstruction_loss_tracker.result(),
-            "kl_loss": self.kl_loss_tracker.result(),
-        }
-
-class VAEExperiment(DenseExperiment):
-
-    def __init__(self, enc_layers = (64,), d_latent = 16, reg_lambda=0.01):
-        self._d_in = 784
-        self.enc_layer_desc = enc_layers
-        self.code_size = d_latent
-        self._save_figs = None
-        self.reg_lambda = reg_lambda
-        self._history_dict = {
-            "loss": [],
-            "reconstruction_loss": [],
-            "kl_loss": [],
-            "val_loss": [],
-            "val_reconstruction_loss": [],
-            "val_kl_loss": [],
-        }
-        self._load_data()
-        self.autoencoder = self._init_model()
-        # compile the model
-        # <--- Pass the internally defined optimizer
-        self.autoencoder.compile(optimizer=self.autoencoder.optimizer_vae, loss=tf.keras.losses.MeanSquaredError())
-
-        logging.info("Initialized VAEExperiment with input size %i, hidden layers %s, latent size %i, reg_lambda %.3f",
-                     self._d_in, self.enc_layer_desc, self.code_size, self.reg_lambda)
-        self.print_model_architecture(self.encoder, self.decoder, self.autoencoder)
-
-    def get_name(self, file_ext=None):
-        hidden_layer_st = "_".join(str(n) for n in self.enc_layer_desc)
-        name = "VAE(d_input=%i, hidden_layers=%s, d_latent=%i)" % (self._d_in, hidden_layer_st, self.code_size)
-        if file_ext=='weights':
-            name += ".weights.h5"
-        elif file_ext=='history':
-            name += ".history.json"
-        return name
-
-    def _init_model(self):
-        # Encoder
-        self.inputs = keras.Input(shape=(self._d_in,))
-        self.enc_hidden = [self.inputs]
-        for enc_layer, n_hidden in enumerate(self.enc_layer_desc):
-            activation = 'relu' if enc_layer < len(self.enc_layer_desc) - 1 else 'sigmoid'
-            hidden_layer = layers.Dense(n_hidden, activation=activation)(self.enc_hidden[-1])
-            self.enc_hidden.append(hidden_layer)
-        self.z_mean = layers.Dense(self.code_size)(self.enc_hidden[-1])
-        self.z_log_var = layers.Dense(self.code_size)(self.enc_hidden[-1])
-        self.z = layers.Lambda(self.sampling, output_shape=(self.code_size,), name='z')([self.z_mean, self.z_log_var])
-        self.encoder = keras.Model(self.inputs, [self.z_mean, self.z_log_var, self.z], name="encoder")
-
-        # Instantiate the encoder and decoder models
-        self.decoder_input = keras.Input(shape=(self.code_size,))
-        self.dec_hidden = [self.decoder_input]
-        for n_hidden in reversed(self.enc_layer_desc):
-            hidden_layer = layers.Dense(n_hidden, activation='relu')(self.dec_hidden[-1])
-            self.dec_hidden.append(hidden_layer)
-        # Decoder output
-
-        self.decoder_output = layers.Dense(self._d_in, activation='sigmoid')(self.dec_hidden[-1])
-        self.decoder = keras.Model(self.decoder_input, self.decoder_output, name="decoder")
-
-        model= VAEModel(self.encoder, self.decoder, reg_lambda=self.reg_lambda)
-
-        # do some inference to build the model
-        _ = model(self.inputs)
-        return model
-
-    @tf.function
-    def sampling(self, args):
-        z_mean, z_log_var = args
-        batch = tf.shape(z_mean)[0]
-        dim = tf.shape(z_mean)[1]
-        epsilon = tf.random.normal(shape=(batch, dim))
-        return z_mean + tf.exp(0.5 * z_log_var) * epsilon
-
-    def save_history(self, filename):
-        """
-        Save the training history to a JSON file.
-        """
-        with open(filename, 'w') as f:
-            json.dump(self._history_dict, f)
-
-    def load_history(self, filename):
-        """
-        Load the training history from a JSON file.
-        """
-        with open(filename, 'r') as f:
-            self._history_dict = json.load(f)
-
-    def fit(self, x, epochs=50, batch_size=256, validation_data=None):
-        """
-        Fit the VAE model to the data.
-        """
-        history = self.autoencoder.fit(
-            x,
-            epochs=epochs,
-            batch_size=batch_size,
-            validation_data=validation_data
-        ).history
-        
-        self._history_dict['loss'].extend(history['loss'])
-        self._history_dict['reconstruction_loss'].extend(history['reconstruction_loss'])   
-        self._history_dict['kl_loss'].extend(history['kl_loss'])
-        self._history_dict['val_loss'].extend(history['val_loss'])
-        self._history_dict['val_reconstruction_loss'].extend(history['val_reconstruction_loss'])
-        self._history_dict['val_kl_loss'].extend(history['val_kl_loss'])
+    def loss_function(self, recon_y, y_batch, mu, log_var, return_terms =False):
+        MSE = F.mse_loss(recon_y, y_batch, reduction='mean')
+        KLD = -0.5 * torch.mean(1 + log_var - mu.pow(2) - log_var.exp()) 
+        total_loss = (1-self.lambda_reg) * MSE + (self.lambda_reg) * KLD
+        if return_terms:
+            return total_loss, MSE, KLD
+        return total_loss
 
     def predict(self, x):
-        return self.autoencoder(x)
-    def save_weights(self, filename=None):
-
-        filename = self.get_name(file_ext='weights') if filename is None else filename
-        self.autoencoder.save_weights(filename)
-        logging.info("Saved model weights to %s", filename)
-        hist_filename = self.get_name(file_ext='history')
-        with open(hist_filename, 'w') as f:
-            json.dump(self._history_dict, f)
-        logging.info("Saved model history to %s", hist_filename)
-        
-    def load_weights(self, filename=None):
-        filename =  self.get_name(file_ext='weights') if filename is None else filename
-        self.autoencoder.load_weights(filename)
-        logging.info("Loaded model weights from %s", filename)
-        hist_filename = self.get_name(file_ext='history')
-        with open(hist_filename, 'r') as f:
-            self._history_dict = json.load(f)
-        logging.info("Loaded model history from %s", hist_filename)
-
-    def plot_history(self,ax=None):
-        """
-        Plot the training history.
-        """
-        if ax is None:
-            fig, ax = plt.subplots(figsize=(10, 6))
-        ax.plot(self._history_dict['loss'], label='Loss')
-        ax.plot(self._history_dict['reconstruction_loss'], label='Reconstruction Loss')
-        ax.plot(self._history_dict['kl_loss'], label='KL Loss')
-        if 'val_loss' in self._history_dict:
-            ax.plot(self._history_dict['val_loss'], label='Validation Loss')
-            ax.plot(self._history_dict['val_reconstruction_loss'], label='Validation Reconstruction Loss')
-            ax.plot(self._history_dict['val_kl_loss'], label='Validation KL Loss')
-        ax.set_title('VAE Training History')
-        ax.set_xlabel('Epochs')
-        ax.set_ylabel('Loss')
-        ax.legend() 
-    def encode_samples(self, x):
-        """
-        Encode samples using the encoder part of the VAE.
-        """
-        z_mean, z_log_var, z = self.encoder.predict(x)
-        return z
-    def decode_samples(self, z):
-        """
-        Decode samples using the decoder part of the VAE.
-        """
-        return self.decoder.predict(z)
+        self.eval()
+        x_tensor = torch.from_numpy(x).to(self.device).float()
+        x_flat = x_tensor.view(-1, self.input_dim)
+        with torch.no_grad():
+            recon_x, _, _ = self(x_flat)
+        return recon_x.cpu().numpy()
     
-    @staticmethod
-    def parse_filename(filename):
-        """
-        Parse the filename to extract parameters,e.g.
-        """
-        patterns =[r"VAE\(d_input=(\d+), hidden_layers=([\d_,]*), d_latent=(\d+)\).weights.h5",
-                  r"VAE\(d_input=(\d+), hidden_layers=([\d_,]*), d_latent=(\d+), reg_lambda=([\d\.]+)\).weights.h5"]
+    def encode(self, x):
+        self.eval()
+        x_tensor = torch.from_numpy(x).to(self.device).float()
+        x_flat = x_tensor.view(-1, self.input_dim)
+        with torch.no_grad():
+            mu, log_var = self.encoder(x_flat)
+            z = self.reparameterize(mu, log_var)
+        return z.cpu().numpy()
+    
+    def decode(self, x):
+        self.eval()
+        z_tensor = torch.from_numpy(x).to(self.device).float()
+        with torch.no_grad():
+            recon_x = self.decoder(z_tensor)
+        return recon_x.cpu().numpy()
 
-        for pattern in patterns:
-            match = re.search(pattern, filename)
-            if match:
-                break
+class VAEExperiment(AutoencoderExperiment):
+    def __init__(self, pca_dims, enc_layers, d_latent, reg_lambda=0.001,batch_size=256, **kwargs):
+        self.device = torch.device(kwargs.get("device", "cpu"))
+        self.enc_layer_desc = enc_layers
+        self.batch_size = batch_size
+        self.code_size = d_latent
+        self._history_dict = {
+            'train-loss': [],
+            'train-mse': [],
+            'train-kld': [],
+            'val-loss': [],
+            'val-kld': [],
+            'val-mse': [],
+            'lambda': []
+        }
+        self._stage = 0
+        self._epoch = 0
+        self.reg_lambda = reg_lambda
+
+        self._save_figs = None
+        self._order = None
+        self._mse_errors = None
+        self._reconstructed_test = None
+        self._encoded_test = None
+
+        self._d_in = pca_dims
+        self._d_out = 28*28
+        super().__init__(pca_dims=pca_dims, **kwargs)
+        logging.info("Initialized VAEExperiment:  %s" % (self.get_name(),))
+
+    def get_name(self, file_kind=None, suffix=None):
+        
+        dim_str = "-".join(map(str, self.enc_layer_desc))
+        root= ("VAE-TORCH(pca=%i_hidden=%s_d-latent=%i_reg-lambda=%.5f)" % (self._d_in, dim_str, self.code_size, self.reg_lambda))
+
+        if suffix is not None:
+            root = "%s_%s" % (root, suffix)
+            
+        if file_kind=='weights':
+            return os.path.join(WORKING_DIR, root + ".weights")
+        elif file_kind =='image':
+            return os.path.join(WORKING_DIR, root + ".image.png")
+        elif file_kind == 'history':
+            return os.path.join(WORKING_DIR, root + ".history.pkl")
+
+        return root
+
+
+    @staticmethod
+    def from_filename(cls, filename):
+        match = re.match(r"VAE-TORCH\(pca=(\d+)_hidden=([\d\-]+)_d-latent=(\d+)_reg-lambda=(\d+\.\d+)\)", filename)
         if not match:
-            raise ValueError("Filename does not match expected format.")
+            raise ValueError(f"Filename {filename} is not in the expected format.")
+        enc_layers = list(map(int, match.group(1).split('-')))
+        d_latent = int(match.group(2))
+        reg_lambda = float(match.group(3))
+        n_epochs = int(match.group(4))
+        return cls(enc_layers, d_latent, reg_lambda, n_epochs)
+
+    def _init_model(self):
+        self.model = VAE(input_dim=self._d_in, 
+                         hidden_dims=self.enc_layer_desc, 
+                         latent_dim=self.code_size, 
+                         output_dim=self._d_out, 
+                         device=self.device,
+                         lambda_reg=self.reg_lambda).to(self.device)
         
-        d_input = int(match.group(1))
-        ds_hidden = tuple(int(n) for n in match.group(2).split(',')) if match.group(2) != '' else ()
-        d_latent = int(match.group(3))
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
+
+    def train_more(self, epochs=25):
+        x_train_tensor = torch.from_numpy(self.x_train_pca).float()
+        y_train_tensor = torch.from_numpy(self.x_train).float()
+        x_test_tensor = torch.from_numpy(self.x_test_pca).float()
+        y_test_tensor = torch.from_numpy(self.x_test).float()
+        x_train_flat = x_train_tensor.view(-1, self._d_in)
+        y_train_flat = y_train_tensor.view(-1, self._d_out)
+        x_test_flat = x_test_tensor.view(-1, self._d_in)
+        y_test_flat = y_test_tensor.view(-1, self._d_out)
+        train_dataset = TensorDataset(x_train_flat, y_train_flat)
+        train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
+        test_dataset = TensorDataset(x_test_flat, y_test_flat)
+        test_loader = DataLoader(test_dataset, batch_size=self.batch_size, shuffle=False)
+
+        for epoch in range(epochs):
+            t_start = time.perf_counter()
+            self.model.train()
+            train_losses = []
+            train_loss_terms = {'kld': [], 'mse': []}
+            for i,(x_batch, y_batch) in enumerate(train_loader):
+                x_batch = x_batch.to(self.device)
+                y_batch = y_batch.to(self.device)
+                self.optimizer.zero_grad()
+                recon_y, mu, log_var = self.model(x_batch)
+                loss, MSE ,KLD = self.model.loss_function(recon_y, y_batch, mu, log_var, return_terms=True)
+                train_loss_terms['kld'].append(KLD.item())
+                train_loss_terms['mse'].append(MSE.item())
+                loss.backward()
+                self.optimizer.step()
+                train_losses.append(loss.item())
+            avg_train_loss = np.mean(train_losses)
+            self._history_dict['train-loss'].append(avg_train_loss)
+            self._history_dict['train-mse'].append(np.mean(train_loss_terms['mse']))
+            self._history_dict['train-kld'].append(np.mean(train_loss_terms['kld']))    
+            self.model.eval()
+            test_losses = []
+            test_loss_terms = {'kld': [], 'mse': []}
+            duration = time.perf_counter() - t_start
+            with torch.no_grad():
+                for i, (x_batch, y_batch) in enumerate(test_loader):
+                    x_batch = x_batch.to(self.device)
+                    y_batch = y_batch.to(self.device)
+                    recon_y, mu, log_var = self.model(x_batch)
+                    loss, MSE, KLD = self.model.loss_function(recon_y, y_batch, mu, log_var, return_terms=True)
+                    test_loss_terms['kld'].append(KLD.item())
+                    test_loss_terms['mse'].append(MSE.item())
+                    test_losses.append(loss.item())
+            avg_test_loss = np.mean(test_losses)
+            self._history_dict['val-loss'].append(avg_test_loss)
+            self._history_dict['val-mse'].append(np.mean(test_loss_terms['mse']))
+            self._history_dict['val-kld'].append(np.mean(test_loss_terms['kld']))
+            self._history_dict['lambda'].append(self.model.lambda_reg)
+            print(f"Epoch {epoch+1}/{epochs} ({duration:.4f}s), "+
+                  f"Training Loss: {avg_train_loss:.4f},"+
+                  f"(MSE: {self._history_dict['train-mse'][-1]:.4f}, "+
+                  f"KLD: {self._history_dict['train-kld'][-1]:.4f}), "+
+                  f"Test Loss: {avg_test_loss:.4f}  "+
+                  f"(MSE: {self._history_dict['val-mse'][-1]:.4f}, "+
+                  f"KLD: {self._history_dict['val-kld'][-1]:.4f})")
+
+        self.save_weights()
+        self._save_history()
+
+    def _save_history(self):
+        filename = self.get_name(file_kind='history')
+        with open(filename, 'wb') as f:
+            pickle.dump(self._history_dict, f)
+        logging.info("Saved training history to %s", filename)
+
+    def _load_history(self):
+        filename = self.get_name(file_kind='history')
+        if not os.path.exists(filename):
+            logging.info("No training history found at %s", filename)
+            return
+        with open(filename, 'rb') as f:
+            self._history_dict = pickle.load(f)
+        logging.info("Loaded training history from %s", filename)
+
+    def _attempt_resume(self):
+        try:
+            logging.info("Attempting to load pre-trained weights...")
+            self.load_weights()
+            logging.info("Attempting to load history...")
+            self._load_history()
+            return True
+        except FileNotFoundError:
+            logging.info("No pre-trained weights found, starting fresh training.")
+        return False
+
+    def _encode_samples(self, x):
+        return self.model.encode(x=x)
+
+    def decode_samples(self, z):
+        return self.model.decode(x=z)
+    def save_weights(self):
+        filename=self.get_name(file_kind='weights')
+        torch.save(self.model.state_dict(), filename)
+        logging.info("Saved model weights to %s", filename)
+
+    def load_weights(self):
+        filename=self.get_name(file_kind='weights')
+        self.model.load_state_dict(torch.load(filename, map_location=self.device,weights_only=True))
+        logging.info("Loaded model weights from %s", filename)
+
+
+    def _plot_code_samples(self, n_samp=39):
+        """
+        TODO: Sort the code units by how likely they are to be useful in the encoding.
+
+        For every code unit show a distribution of its activations given the digit.
+        These will be like narrow-box plots with a thin line spanning +/- 3 standard deviations,
+        drawn over a thick line spanning the interquartile range (IQR), and a dot representing the median.
+        outliers are drawn as single pixels.
+        """
+        image_size_wh=300,1200
+        dist_width = 250
+        blank = np.zeros((image_size_wh[1], image_size_wh[0], 3), dtype=np.uint8)
+        blank[:] = np.array(COLORS['OFF_WHITE_RGB'], dtype=np.uint8)
+        codes = self._encoded_test
+        n_code_units = codes.shape[1]
+        digit_labels = self.y_test
         
-        return {
-            'd_input': d_input,
-            'ds_hidden': ds_hidden,
-            'd_latent': d_latent
-        }       
-    @staticmethod
-    def from_filename(filename):
-        """
-        Create a VAE instance from a filename.
-        """
-        params = VAEExperiment.parse_filename(filename)
-        vae = VAEExperiment(
-            enc_layers=params['ds_hidden'],
-            d_latent=params['d_latent'],
-            reg_lambda=0.01  # Default regularization parameter
-        )
-        vae.load_weights(filename)
-        return vae  
+        digit_subset = [1, 3, 8]
+        colors = [COLORS['MPL_BLUE_RGB'],
+                COLORS['MPL_ORANGE_RGB'],
+                COLORS['MPL_GREEN_RGB']]
+
+        colors = [np.array(c) for c in colors]
+        height, t, pad_y = 12, 3, 9 # calc_scale(None, n_code_units)
+        print(height, t, pad_y)
+
+        unit_dists = [LatentDigitDist(codes[:, code_unit], digit_labels,colors=colors) for code_unit in range(n_code_units)]
+        img = np.zeros((1000,1000,3),dtype=np.uint8)
+            
     
-    def run_staged_experiment(self, n_stages=10, n_epochs=25, save_figs=True):
-        """
-        Run a staged experiment, training the VAE in stages.
-        """
+        x = 25
+        y = 10
+        for unit, unit_dists in enumerate(unit_dists):
+            bbox = {'x': (x, x + dist_width), 'y': (y, y + height)}
+            bottom = bbox['y'][1]
+            try:
+
+                d_bbox = unit_dists.render(blank, bbox, orient='horizontal',
+                                            centered=True, show_axis=False,
+                                            thicknesses=[
+                                                t, t, t], alphas=[.2, .5, .5, 1],
+                                            digit_subset=digit_subset)[1]
+                
+                bottom = d_bbox['y'][1]
+                
+                #draw_bbox(blank, d_bbox, thickness=1, inside=True, color=(256 - bkg_color))
+            except Exception as e:
+                # raise e
+                break
+
+            y = bottom + pad_y
+        fig, ax = plt.subplots(figsize=(5,8))
+        ax.imshow(blank)
+        ax.axis('off')
+        plt.suptitle("Latent Variable Distributions for %i Code Units" % n_code_units, fontsize=14)
+        plt.tight_layout()
+
+    def _eval(self):
+        #nimport ipdb; ipdb.set_trace()
+        self._encoded_test = self.encode_samples(self.x_test)
+        self._reconstructed_test = self.decode_samples(self._encoded_test)
+        def mse_err(imageA, imageB):
+            err = np.sum((imageA.astype("float") - imageB.astype("float")) ** 2)
+            err /= float(imageA.shape[0])
+            return err
+        self._mse_errors = np.array([mse_err(img_a, img_b)
+                                    for img_a, img_b in zip(self.x_test, self._reconstructed_test)])
+        self._order = np.argsort(self._mse_errors)
+        logging.info("Evaluation completed on %i TEST samples:", self._mse_errors.size)
+        logging.info("\tMean squared error: %.4f (%.4f)", np.mean(self._mse_errors), np.std(self._mse_errors))
+
+    def run_staged_experiment(self, n_stages=5, n_epochs=25, save_figs=True):
+        if not os.path.exists(WORKING_DIR):
+            os.makedirs(WORKING_DIR)
+
+        self._attempt_resume()
         self._save_figs = save_figs
-
-        if not self._attempt_resume():
-            logging.info("Training 1 epoch to show loss function terms.")
-            self.train_more(n_epochs=1, save_wts=False)
-        logging.info("***************************")
-        logging.info("Starting %i stages of training %i epochs each.", n_stages, n_epochs)
-
         for stage in range(n_stages):
             self._stage = stage
             logging.info("Running stage %i of %i", stage + 1, n_stages)
-            result = self.train_more(n_epochs=n_epochs, save_wts=True)
-            self._plot_history()
-            self.plot_digit_comparison()
-            self.plot_encoding_distributions()
+            self.train_more(epochs=n_epochs)
+
+            self._eval()
+            self._plot_model()
+
+    def _plot_model(self):
+        self._plot_encoding_errors(show_diffs=False)
+        self._plot_encoding_errors(show_diffs=True)
+        self._plot_code_samples()
+        self._plot_history()
+        if not self._save_figs:
+            plt.show()
+
+    def _plot_history(self):
+        height_ratios = [3, 3, 3, 1]
+        fig, ax = plt.subplots(nrows=4, ncols=1, figsize=(8, 10),
+                                 gridspec_kw={'height_ratios': height_ratios})
+        ax[0].plot(self._history_dict['train-loss'], label='Train Loss')
+        ax[0].plot(self._history_dict['val-loss'], label='Validation Loss')
+        ax[0].set_title('Loss history', fontsize=12)
+        ax[0].legend()
+
+        # MSE:
+        ax[1].plot(self._history_dict['train-mse'], label='Train MSE')
+        ax[1].plot(self._history_dict['val-mse'], label='Validation MSE')
+        ax[1].set_title('Loss, MSE-term history', fontsize=12)
+        ax[1].legend()
+
+        # KLD:
+        ax[2].plot(self._history_dict['train-kld'], label='Train KLD')
+        ax[2].plot(self._history_dict['val-kld'], label='Validation KLD')
+        ax[2].set_title('Loss, KLD-term history', fontsize=12)
+        ax[2].legend()
+
+        # Lambda:
+        ax[3].plot(self._history_dict['lambda'], label='Lambda')
+        ax[3].set_title('lambda history', fontsize=12)
+        ax[3].set_xlabel('Epoch', fontsize=10)
+        ax[3].set_ylabel('lambda', fontsize=10)
+        #grid
+
+        #turn off x-axis for all but bottom plots:
+        for i in range(len(ax)-1):
+            ax[i].set_xticklabels([])
+            ax[i].grid(True)
+        ax[3].grid(True)
+
+        plt.tight_layout()
+        if self._save_figs:
+            filename = self.get_name(file_kind='image', suffix='History')
+            self._maybe_save_fig(fig, filename)
+        else:
+            plt.show()
+
+    def _plot_code_samples(self, n_samp=39):
+        """
+        TODO: Sort the code units by how likely they are to be useful in the encoding.
+
+        For every code unit show a distribution of its activations given the digit.
+        These will be like narrow-box plots with a thin line spanning +/- 3 standard deviations,
+        drawn over a thick line spanning the interquartile range (IQR), and a dot representing the median.
+        outliers are drawn as single pixels.
+        """
+        digit_subset = [1, 3, 8]
+
+        
+        image_size_wh=300,1200
+        dist_width = 250
+        blank = np.zeros((image_size_wh[1], image_size_wh[0], 3), dtype=np.uint8)
+        blank[:] = np.array(COLORS['OFF_WHITE_RGB'], dtype=np.uint8)
+        codes = self._encoded_test
+        n_code_units = codes.shape[1]
+        digit_labels = self.y_test
+        
+        colors = [COLORS['MPL_BLUE_RGB'],
+                COLORS['MPL_ORANGE_RGB'],
+                COLORS['MPL_GREEN_RGB']]
+
+        colors = [np.array(c) for c in colors]
+        height, t, pad_y = 12, 3, 9 # calc_scale(None, n_code_units)
+        print(height, t, pad_y)
+
+        unit_dists = [LatentDigitDist(codes[:, code_unit], digit_labels,colors=colors) for code_unit in range(n_code_units)]
+        img = np.zeros((1000,1000,3),dtype=np.uint8)
             
-            if not self._save_figs:  # plots save figures if they need to be saved
-                plt.tight_layout()
-                plt.show()
+    
+        x = 25
+        y = 10
+        for unit, unit_dists in enumerate(unit_dists):
+            bbox = {'x': (x, x + dist_width), 'y': (y, y + height)}
+            bottom = bbox['y'][1]
+            try:
 
-def load_mnist():
-    (x_train, y_train), (x_test, y_test) = mnist.load_data()
-    x_train = x_train.reshape((len(x_train), -1)).astype('float32') / 255.0
-    x_test = x_test.reshape((len(x_test), -1)).astype('float32') / 255.0
-    return (x_train, y_train), (x_test, y_test)
+                d_bbox = unit_dists.render(blank, bbox, orient='horizontal',
+                                            centered=True, show_axis=False,
+                                            thicknesses=[
+                                                t, t, t], alphas=[.2, .5, .5, 1],
+                                            digit_subset=digit_subset)[1]
+                
+                bottom = d_bbox['y'][1]
+                
+                #draw_bbox(blank, d_bbox, thickness=1, inside=True, color=(256 - bkg_color))
+            except Exception as e:
+                # raise e
+                break
 
-
-DEFAULT_PARAMS = {
-    'd_hidden': (256,),  # Hidden layer size
-    'd_latent': 32,   # Latent space size
-    'n_epochs': 50,   # Number of epochs to train
-    'batch_size': 256,  # Batch size for training
-    'reg_lambda': 0.05  # Regularization parameter
-}
-
-
-def wts_name_to_hist_name(wts_name):
-    return wts_name.replace('.weights.h5', '.history.json')
-
-
-def test_vae(params=None):
-    param = params if params is not None else DEFAULT_PARAMS
-    d_input = 784
-    ds_hidden = params['d_hidden']
-    d_latent = params['d_latent']
-    n_epochs = params['n_epochs']
-    batch_size = params['batch_size']
-    reg_lambda = params['reg_lambda']
-
-    vae = VAEExperiment(d_input, ds_hidden, d_latent, reg_lambda=reg_lambda)
-
-    # Create dummy data
-    (x_train, y_train), (x_test, y_test) = load_mnist()
-    logging.info(f"Training VAE with input shape: {x_train.shape}")
-    model_name = vae.get_name()
-    filename = "%s.weights.h5" % model_name
-    if os.path.exists(filename):
-        logging.info(f"Loading existing model weights from {filename}")
-        _ = vae.predict(x_train[:30, :])
-        vae.load_weights(filename)
-        vae.load_history(wts_name_to_hist_name(filename))
-    else:
-        logging.info(f"Training new model: {model_name}")
-
-    vae.fit(x_train, epochs=n_epochs, batch_size=batch_size, validation_data=(x_test, x_test))
-    # build and save the model after training
-   
-    _ = vae.predict(x_train[:30, :])
-    vae.save_weights(filename)
-    vae.save_history(wts_name_to_hist_name(filename))
-    logging.info(f"Model weights saved to {filename}")
-    vae.plot_history()
-    plt.show()
-    def _encode_decode_samples(x):
-        """
-        Encode and decode n sample images
-        """
-        z_mean, z_log_var, z = vae.encoder.predict(x)
-        recon = vae.decoder.predict(z)
-        return (recon * 255.0).astype(np.uint8), z
-
-    def make_digit_comparison_image(shape, digit):
-        """
-        digit comparison:  Make an image with 2 side-by-side grids of digits, each of shape shape[0]xshape[1],
-            left are original, right are reconstructed.
-        Sort images by reconstruction loss.
-        """
-        n_test = shape[0]*shape[1]
-        h = shape[0]*28
-        w = shape[1]*28
-        orig_img = np.zeros((h, w), dtype=np.uint8)
-        recon_img = np.zeros((h, w), dtype=np.uint8)
-        valid = np.where(y_test == digit)[0]
-        sample_inds = np.random.choice(valid, size=n_test, replace=False)
-
-        # Fill the original image grid
-        reconstructed, codes = _encode_decode_samples(x_test[sample_inds])
-        errors = np.mean(np.abs(x_test[sample_inds] - reconstructed), axis=1)
-        sorted_inds = np.argsort(errors)
-        sample_inds = sample_inds[sorted_inds]
-        ind = 0
-        for i in range(shape[0]):
-            for j in range(shape[1]):
-                orig_img[i*28:(i+1)*28, j*28:(j+1)*28] = (x_test[sample_inds[ind]]
-                                                          * 255.0).astype(np.uint8).reshape(28, 28)
-                ind += 1
-
-        # Generate the reconstructed image grid
-        recon_img = np.zeros((h, w), dtype=np.uint8)
-        ind = 0
-        # import ipdb; ipdb.set_trace()
-        for i in range(shape[0]):
-            for j in range(shape[1]):
-                recon = reconstructed[sorted_inds[ind]]
-                recon_img[i*28:(i+1)*28, j*28:(j+1)*28] = recon.reshape(28, 28)
-                ind += 1
-        return np.concatenate((orig_img, recon_img), axis=1), codes
-
-    def make_dimension_dist_image(codes, sample_dims, x_spread=10, h=200):
-        """
-        For each sample dimension, plot the distribution of values of the encoding for each digit.
-        Show each digit's distribution as a vertical band (x-dimension random) in 10 different columns & colors.
-
-             sample dim 1          (for the n sample dimensions)
-
-          . . o . . . . . . O .   
-          o o O . o . . . o O .   
-          o O o . o O . o O o .   
-          O o . . o . . o o . o   
-          o . . o O . O O . . .   
-          . . . O O . . . o . o   
-
-        """
-        colors = sns.color_palette("husl", 10)  # Use seaborn's color palette for distinct colors
-        all_codes = np.concatenate(codes, axis=0)
-
-        header = 25
-
-        def get_dim_strip(dimension, dot=2):
-            high, low = np.max(all_codes[:, dimension], axis=0), np.min(all_codes[:, dimension], axis=0)
-            strip_img = np.zeros((h+header, (x_spread + (dot-1))*10, 3), dtype=np.uint8)
-
-            def get_digit_strip(digit):
-                color = (np.array(colors[digit]) * 255).astype(np.uint8)
-                digit_strip_img = np.zeros((h, x_spread + (dot-1), 3), dtype=np.uint8)  # + 255
-                values = codes[digit][:, dimension]
-                digit_values = (high-values) / (high-low) * (h-(dot-1))
-                digit_values = digit_values.astype(int)
-                digit_x_offsets = np.random.randint(0, x_spread, size=len(digit_values))
-
-                for (dx, dy) in zip(digit_x_offsets, digit_values):
-                    digit_strip_img[dy:dy+dot, dx:dx+dot, :] = color.reshape(1, 1, 3)
-
-                return digit_strip_img
-
-            strips = [get_digit_strip(digit) for digit in range(10)]
-            strip_img[header:, :, :] = np.concatenate(strips, axis=1)
-
-            # Write dimension in header space
-            header_txt = "dim %i" % dimension
-
-            cv2.putText(strip_img, header_txt, (25, header-5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-            return strip_img
-        strip_images = [get_dim_strip(dim) for dim in sample_dims]
-        spacer = np.zeros((h+header, 10, 3), dtype=np.uint8)  # Spacer between dimensions
-
-        strip_images = [np.concatenate((img, spacer), axis=1) for img in strip_images]
-        strip_image = np.concatenate(strip_images, axis=1)
-        # Add a title for each dimension
-        return strip_image
-
-    comparisons = [make_digit_comparison_image((20, 3), digit) for digit in range(10)]
-
-    columns = [comp[0] for comp in comparisons]
-    columns = np.concatenate(columns, axis=1)
-    n_sample_dims = min(6, d_latent)
-    sample_dimensions = np.random.choice(range(d_latent), size=n_sample_dims, replace=False)
-    codes = [comp[1] for comp in comparisons]
-    code_image = make_dimension_dist_image(codes, sample_dimensions)
-    fig, ax = plt.subplots(nrows=2, ncols=1, figsize=(15, 13))
-    ax[0].imshow(columns, cmap='gray')
-    ax[0].set_title("Original (left) and Reconstructed (right) Images\n" +
-                    vae.get_name() + "\n" +
-                    "Trained for %i epochs, final loss %.6f, (%.6f * (1-l) + %.6f * (l))" % (n_epochs,
-                                                                                             vae.history['loss'][-1],
-                                                                                             vae.history['reconstruction_loss'][-1],
-                                                                                             vae.history['kl_loss'][-1]))
-    ax[0].axis('off')
-
-    ax[1].imshow(code_image)
-    ax[1].set_title("Distribution of Encoded Values in Latent Space\n" +
-                    "for Sample Dimensions %s" % str(sample_dimensions))
-
-    plt.show()
+            y = bottom + pad_y
+        fig, ax = plt.subplots(figsize=(5,8))
+        ax.imshow(blank)
+        ax.axis('off')
+        plt.suptitle("Code unit distributions (black shows all units, color shows digits: %s)\n%s" % (
+            ", ".join(str(d) for d in digit_subset), self.get_name()), fontsize=14)
+        
+        suffix = "LatentDist_stage=%i" % (self._stage+1)
+        filename = self.get_name(file_kind='image', suffix=suffix)
+        #self._maybe_save_fig(fig, filename)
+        if self._save_figs:
+            cv2.imwrite(filename, blank)
 
 
 
+    def _plot_encoding_errors(self, n_samp=39, show_diffs=False):
+
+        def show_mosaic(ax, inds, title, color):
+            if not show_diffs:
+                reconstructed_imgs = [make_img(self._reconstructed_test[i]) for i in inds]
+                image = make_digit_mosaic(reconstructed_imgs, mosaic_aspect=4.0)
+            else:
+                diff_imgs = [diff_img(self.x_test[i], self._reconstructed_test[i]) for i in inds]
+                image = make_digit_mosaic(diff_imgs, mosaic_aspect=4.0)
+            ax.imshow(image)
+            ax.set_title(title, fontsize=12, color=color)
+            ax.axis('off')
+
+        fig = plt.figure(constrained_layout=True, figsize=(10, 8))
+        # show best, worst, and middle 4 quantiles above a histogram
+        n_quantiles = 8
+        n_q_rows = n_quantiles//2
+        n_q_cols = n_quantiles // n_q_rows
+        gs = GridSpec(n_q_rows+1, n_q_cols, figure=fig)
+        q_axes = []
+        for j in range(n_q_cols):
+            for i in range(n_q_rows):
+                ax = fig.add_subplot(gs[i, j])
+                q_axes.append(ax)
+
+        hist_axis = fig.add_subplot(gs[n_q_rows, :])
+
+        best_inds = self._order[:n_samp]
+        worst_inds = self._order[-n_samp:]
+        quantile_sample_indices = np.linspace(0, len(self._order)-1, n_quantiles, dtype=int)[1:-1]
+        self._quant_inds = [best_inds]
+        for ind in quantile_sample_indices:
+            extra = n_samp % 2
+            self._quant_inds.append(self._order[ind-n_samp//2:ind+n_samp//2+extra])
+        self._quant_inds.append(worst_inds)
+        suffix = ""
+        mid_labels = ["sample group %i - %s" % (i, suffix) for i in range(1, n_quantiles-1)]
+        q_labels = ['Lowest Test MSE - %s' % suffix] + mid_labels + ['Highest Test MSE - %s' % suffix]
+        n_colors = len(q_labels)
+        cmap = plt.get_cmap('brg', n_colors)
+        colors = [cmap(i) for i in range(n_colors)]
+        for i, (inds, label) in enumerate(zip(self._quant_inds, q_labels)):
+            show_mosaic(q_axes[i], inds, label, color=colors[i])
+
+        model_name = self.get_name()
+        title = "Autoencoder Model: %s " % (model_name, ) +\
+            "\nData: n_train=%i, n_test = %i " % (self.x_train.shape[0], self.x_test.shape[0])
+        if show_diffs:
+            title += "          RED: decoded pixel >= 10% too high,"
+        title += "\nResults: test MSE = %.4f (%.4f)" % (np.mean(self._mse_errors), np.std(self._mse_errors))
+        if show_diffs:
+            title += "             BLUE: decoded pixel >= 10% too low."
+
+        plt.suptitle(title, fontsize=14)
+        self._show_err_hist(hist_axis, q_labels, colors)
+
+
+        suffix = "EncErrs_stage=%i" % (self._stage,)
+        filename = self.get_name(file_kind='image', suffix=suffix)
+        self._maybe_save_fig(fig, filename)
+
+
+    def _show_err_hist(self, ax, labels, band_colors):
+        ax.hist(self._mse_errors, bins=100, color='gray', alpha=0.8)
+        ax.set_title('MSE distribution & sample group locations', fontsize=12)
+
+        # Draw vertical bands for ranges of plot images
+
+        def draw_band(ax, band_index, color, label):
+
+            err_range = np.min(self._mse_errors[self._quant_inds[band_index]]), np.max(
+                self._mse_errors[self._quant_inds[band_index]])
+            ax.axvspan(err_range[0], err_range[1], color=color, alpha=0.6, label=label)
+
+        for i, label in enumerate(labels):
+            draw_band(ax, i, band_colors[i], label)
+        # ax.legend(loc='upper center', fontsize=10)
+
+
+
+    # Add plotting methods as needed to match DenseExperiment
 
 def vae_demo():
-    description = "Run a Variational Autoencoder (VAE) on MNIST digits."
-    extra_args = [dict(name='--reg_lambda', type=float, default=0.01,
-                            help='Regularization parameter for VAE (default: 0.01)'),
-                  dict(name='--d_latent', type=int, default=16,
-                            help='Dimensionality of the latent space (default: 16)')]
-    args = VAEExperiment.get_args(description=description, extra_args=extra_args)
-    ve = VAEExperiment(enc_layers=args.layers,
-                       d_latent=args.d_latent,
-                       reg_lambda=args.reg_lambda)
-    ve.run_staged_experiment(n_stages=args.stages, n_epochs=args.epochs, save_figs=not args.no_plot)
-
+    args = VAEExperiment.get_args("Train a variational autoencoder on MNIST data.",
+                                  extra_args=[
+                                          dict(name='--batch_size', type=int, default=256, help="Batch size for training (Default 256)"),
+                                      dict(name='--reg_lambda', type=float, default=0.01,
+                                           help='Regularization parameter for VAE (default: 0.01)'),
+                                      dict(name='--d_latent', type=int, default=16,
+                                           help='Dimensionality of the latent space (default: 16)')
+                                  ])
+    logging.info("Running VAE with args: %s", args)
+    ve = VAEExperiment(
+        batch_size=args.batch_size,
+        enc_layers=args.layers,
+        d_latent=args.d_latent,
+        reg_lambda=args.reg_lambda,
+        pca_dims=args.pca_dims,
+    )
+    ve.run_staged_experiment(n_stages=args.stages, n_epochs=args.epochs, save_figs=args.no_plot)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     vae_demo()
-
-    logging.info("VAE training completed.")
