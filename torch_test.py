@@ -12,6 +12,8 @@ import numpy as np
 from tests import load_mnist
 from pca import PCA
 import os
+from latent_var_plots import LatentDigitDist,calc_scale
+from colors import COLORS
 
 class Encoder(nn.Module):
     def __init__(self, input_dim, hidden_dim, latent_dim):
@@ -124,7 +126,7 @@ class VAE(nn.Module):
         # BCE = F.binary_cross_entropy(recon_y, y_batch.view(-1, decoder_output_dim), reduction='sum')
 
         # KL Divergence Loss
-        KLD = -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp())
+        KLD = -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp()) if self.lambda_reg != 0 else 0
 
         # L2 Regularization term for decoder weights
         # decoder_l2_reg = 0
@@ -232,7 +234,7 @@ class MNISTTest(object):
 
     def _load_data(self):
         (self.x_train, self.y_train), (self.x_test, self.y_test) = load_mnist()
-        pca = PCA(dims=100)
+        pca = PCA(dims=64)
         self.x_train_pca = pca.fit_transform(self.x_train.reshape(self.x_train.shape[0], -1))
         self.x_test_pca = pca.encode(self.x_test.reshape(self.x_test.shape[0], -1))
 
@@ -241,8 +243,8 @@ class MNISTTest(object):
         print("Cuda available:", torch.cuda.is_available())
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.model = train_vae_with_separate_targets(self.x_train_pca, self.x_train, self.x_test_pca, self.x_test,
-                                                     n_hidden=512, n_latent=16, lambda_reg=0.9,
-                                                     epochs=1000, learning_rate=1e-3, batch_size=8129,
+                                                     n_hidden=512, n_latent=16, lambda_reg=0.05,
+                                                     epochs=50, learning_rate=1e-3, batch_size=2048,
                                                      device=device)
         filename = "%s.weights" % self.model.get_name()
 
@@ -282,6 +284,53 @@ class MNISTTest(object):
         drawn over a thick line spanning the interquartile range (IQR), and a dot representing the median.
         outliers are drawn as single pixels.
         """
+        image_size_wh=300,800
+        dist_width = 250
+        blank = np.zeros((image_size_wh[1], image_size_wh[0], 3), dtype=np.uint8)
+        blank[:] = np.array(COLORS['OFF_WHITE_RGB'], dtype=np.uint8)
+        codes = self._encoded_test
+        n_code_units = codes.shape[1]
+        digit_labels = self.y_test
+        
+        digit_subset = [1, 3, 8]
+        colors = [COLORS['MPL_BLUE_RGB'],
+                COLORS['MPL_ORANGE_RGB'],
+                COLORS['MPL_GREEN_RGB']]
+
+        colors = [np.array(c) for c in colors]
+        height, t, pad_y = 14, 3, 9 # calc_scale(None, n_code_units)
+        print(height, t, pad_y)
+
+        unit_dists = [LatentDigitDist(codes[:, code_unit], digit_labels,colors=colors) for code_unit in range(n_code_units)]
+        img = np.zeros((1000,1000,3),dtype=np.uint8)
+            
+    
+        x = 25
+        y = 10
+        for unit, unit_dists in enumerate(unit_dists):
+            bbox = {'x': (x, x + dist_width), 'y': (y, y + height)}
+            bottom = bbox['y'][1]
+            try:
+
+                d_bbox = unit_dists.render(blank, bbox, orient='horizontal',
+                                            centered=True, show_axis=False,
+                                            thicknesses=[
+                                                t, t, t], alphas=[.2, .5, .5, 1],
+                                            digit_subset=digit_subset)[1]
+                
+                bottom = d_bbox['y'][1]
+                
+                #draw_bbox(blank, d_bbox, thickness=1, inside=True, color=(256 - bkg_color))
+            except Exception as e:
+                # raise e
+                break
+
+            y = bottom + pad_y
+        fig, ax = plt.subplots(figsize=(5,8))
+        ax.imshow(blank)
+        ax.axis('off')
+        plt.suptitle("Latent Variable Distributions for %i Code Units" % n_code_units, fontsize=14)
+        plt.tight_layout()
 
     def _plot_encoding_errors(self, n_samp=39, show_diffs=False):
 
