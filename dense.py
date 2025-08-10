@@ -12,7 +12,6 @@ from argparse import ArgumentParser
 from matplotlib.gridspec import GridSpec
 import json
 from experiment import AutoencoderExperiment
-
 import re
 
 
@@ -20,15 +19,22 @@ class DenseExperiment(AutoencoderExperiment):
     _DEFAULT_ACT_FNS = {'internal': 'relu',
                         'encoding': 'relu'}
 
-    def __init__(self, enc_layers=(64,), act_fns=None, bw_data=False):
+    def __init__(self, enc_layers=(64,), act_fns=None, **kwargs):
         """
         Initialize the Dense Experiment with a specified number of encoding units.
         :param enc_layers: list of layer sizes, final value is the encoding layer size.
         :param n_epochs: Number of epochs to train the autoencoder.
         :param act_fns: Dictionary of activation functions for internal, encoding, and output layers.
                         If None, uses default activation functions.
-        :param bw_data: If True, binarizes the images to black and white (0 or 1).
         """
+
+        self._history_dict = None
+        if 'history_dict'  in kwargs:
+            self._history_dict = kwargs['history_dict']
+            del kwargs['history_dict']
+
+        super().__init__(**kwargs)
+
         self.enc_layer_desc = enc_layers
         self.code_size = enc_layers[-1]
         self.act_fns = self._DEFAULT_ACT_FNS if act_fns is None else act_fns
@@ -40,47 +46,25 @@ class DenseExperiment(AutoencoderExperiment):
         if 'output' not in self.act_fns:
             # to resemble pixel values in [0, 1], probably don't change.
             self.act_fns['output'] = 'sigmoid'
-
-        self._d_in = 784  # number of pixels in MNIST images
-        self._history_dict = None
-        self._load_data(binarize=bw_data)
+        self._d_in = self.pca.pca_dims
+        self._d_out = 784
         self._init_model()
         logging.info("Experiment initialized:  %s" % self.get_name())
-        self.print_model_architecture(self.encoder, self.decoder, self.autoencoder)
+        if isinstance(self.encoder, Model):
+            self.print_model_architecture(self.encoder, self.decoder, self.autoencoder)
 
-    def _get_loss_fn(self):
-        return 'mean_squared_error'
-
-    def _load_data(self, binarize=False):
-        self.mnist_data = MNISTData()
-        self.x_train = self.mnist_data.x_train.reshape(-1, self._d_in)
-        self.x_test = self.mnist_data.x_test.reshape(-1, self._d_in)
-        self.y_train = np.where(self.mnist_data.y_train)[1]
-        self.y_test = np.where(self.mnist_data.y_test)[1]
-
-        if False:
-            # Re-cut test/train split.
-            n_test_per_dig = [np.sum(self.y_test == i) for i in range(10)]
-            new_x_train, new_y_train, new_x_test, new_y_test = [], [], [], []
-            for i in range(10):
-                x = np.concatenate((self.x_train[self.y_train == i], self.x_test[self.y_test == i]), axis=0)
-                y = np.ones(x.shape[0], dtype=int) * i
-                test_inds = np.random.choice(x.shape[0], n_test_per_dig[i], replace=False)
-                train_inds = np.setdiff1d(np.arange(x.shape[0]), test_inds)
-                new_x_train.append(x[train_inds])
-                new_y_train.append(y[train_inds])
-                new_x_test.append(x[test_inds])
-                new_y_test.append(y[test_inds])
-            self.x_train = np.concatenate(new_x_train, axis=0)
-            self.y_train = np.concatenate(new_y_train, axis=0)
-            self.x_test = np.concatenate(new_x_test, axis=0)
-            self.y_test = np.concatenate(new_y_test, axis=0)
-
-        if binarize:
-            self.x_train = (self.x_train > 0.5).astype(np.float32)
-            self.x_test = (self.x_test > 0.5).astype(np.float32)
-
-        logging.info("Data loaded: %i training samples, %i test samples", self.x_train.shape[0], self.x_test.shape[0])
+    def get_name(self, file_ext=None):
+        desc_str = "_".join([str(n) for n in self.enc_layer_desc])
+        pca_str = self.pca.get_name()
+        fname = ("Dense(%s_units=%s_encode=%s_internal=%s)" %
+                 (pca_str, desc_str, self.act_fns['encoding'], self.act_fns['internal']))
+        if file_ext == 'weights':
+            fname += ".weights.h5"
+        elif file_ext == 'history':
+            fname += "history.json"
+        elif file_ext is not None:
+            raise ValueError("Unknown file extension type: %s" % file_ext)
+        return fname
 
     def _init_encoder_layers(self, inputs):
 
@@ -100,7 +84,7 @@ class DenseExperiment(AutoencoderExperiment):
     def _init_decoder_layers(self, encoding):
         decoder_layers = []
         decoder_layer_desc = list(reversed(self.enc_layer_desc[:-1]))  # skip the last encoding layer
-        decoder_layer_desc.append(self._d_in)  # add the input layer size for decoding
+        decoder_layer_desc.append(self._d_out)  # add the input layer size for decoding
         for i, n_units in enumerate(decoder_layer_desc):
             if i == 0:
                 layer_input = encoding
@@ -111,7 +95,7 @@ class DenseExperiment(AutoencoderExperiment):
             decoder_layers.append(layer)
         return decoder_layers
 
-    def _init_model(self, inc_pre_binarized=False):
+    def _init_model(self):
         """
         Initialize all the layers, keep references so internal states can be accessed later.
         """
@@ -122,11 +106,9 @@ class DenseExperiment(AutoencoderExperiment):
         self.decoding_layers = self._init_decoder_layers(encoding)
         decoding = self.decoding_layers[-1]
         self.encoder = Model(inputs=inputs, outputs=encoding, name='encoder')
-        self.pre_binarized_encoder = Model(
-            inputs=inputs, outputs=self.encoding_layers[-2], name='pre_binarized_encoder') if len(self.encoding_layers) > 1 else None
         self.autoencoder = Model(inputs=inputs, outputs=decoding, name='autoencoder')
         self.decoder = Model(inputs=encoding, outputs=decoding, name='decoder')
-        self.autoencoder.compile(optimizer='adam', loss=self._get_loss_fn())
+        self.autoencoder.compile(optimizer='adam', loss='mean_squared_error')
         logging.info("Autoencoder model initialized and compiled")
 
     def is_trained(self):
@@ -135,10 +117,10 @@ class DenseExperiment(AutoencoderExperiment):
             return True
         return False
 
-    def encode_samples(self, samples):
+    def _encode_samples(self, samples):
         if not self.is_trained():
             raise RuntimeError("Model is not trained. Please train the model before encoding samples.")
-        samples = samples.reshape(-1, 784)
+        samples = samples.reshape(-1, self._d_in)
         encoded_samples = self.encoder.predict(samples)
         return encoded_samples
 
@@ -153,18 +135,6 @@ class DenseExperiment(AutoencoderExperiment):
             else:
                 decoded_samples = decoded_samples.reshape(-1, 28, 28)
         return decoded_samples
-
-    def get_name(self, file_ext=None):
-        desc_str = "_".join([str(n) for n in self.enc_layer_desc])
-        fname = ("Dense(%s_encode=%s_internal=%s)" %
-                 (desc_str, self.act_fns['encoding'], self.act_fns['internal']))
-        if file_ext=='weights':
-            fname += ".weights.h5"
-        elif file_ext=='history':
-            fname += "history.json"
-        elif file_ext is not None:
-            raise ValueError("Unknown file extension type: %s" % file_ext)
-        return fname
 
     def save_weights(self, path='.'):
         filename = self.get_name(file_ext='weights')
@@ -239,9 +209,9 @@ class DenseExperiment(AutoencoderExperiment):
         return False
 
     def train_more(self, n_epochs=10, save_wts=True):
-        more_history = self.autoencoder.fit(self.x_train, self.x_train,
+        more_history = self.autoencoder.fit(self.x_train_pca, self.x_train,
                                             epochs=n_epochs, batch_size=512,
-                                            validation_data=(self.x_test, self.x_test))
+                                            validation_data=(self.x_test_pca, self.x_test))
 
         if self._history_dict is None:
             self._history_dict = more_history.history
@@ -251,7 +221,7 @@ class DenseExperiment(AutoencoderExperiment):
         if save_wts:
             self.save_weights()
         return self._eval()
-    
+
     def _accumulate_history(self, more_history):
         if self._history_dict is None:
             self._history_dict = more_history.history
@@ -261,18 +231,17 @@ class DenseExperiment(AutoencoderExperiment):
                     self._history_dict[key] = []
                 self._history_dict[key].extend(more_history.history[key])
 
-
     def _eval(self):
 
         def mse_err(imageA, imageB):
             err = np.sum((imageA.astype("float") - imageB.astype("float")) ** 2)
             err /= float(imageA.shape[0])
             return err
-        self._encoded_test = self.encode_samples(self.x_test)
-        self._decoded_test = self.decode_samples(self._encoded_test)
-        self._both_test = self.autoencoder.predict(self.x_test)
 
-        self._mse_errors = np.array([mse_err(img_a, img_b) for img_a, img_b in zip(self.x_test, self._both_test)])
+        self._reconstructed_test = self.autoencoder.predict(self.x_test_pca)
+
+        self._mse_errors = np.array([mse_err(img_a, img_b)
+                                    for img_a, img_b in zip(self.x_test, self._reconstructed_test)])
         self._order = np.argsort(self._mse_errors)
         logging.info("Evaluation completed on %i samples:", self._mse_errors.size)
         logging.info("\tMean squared error: %.4f (%.4f)", np.mean(self._mse_errors), np.std(self._mse_errors))
@@ -298,10 +267,10 @@ class DenseExperiment(AutoencoderExperiment):
 
         def show_mosaic(ax, inds, title, color):
             if not show_diffs:
-                reconstructed_imgs = [make_img(self._decoded_test[i]) for i in inds]
+                reconstructed_imgs = [make_img(self._reconstructed_test[i]) for i in inds]
                 image = make_digit_mosaic(reconstructed_imgs, mosaic_aspect=4.0)
             else:
-                diff_imgs = [diff_img(self.x_test[i], self._decoded_test[i]) for i in inds]
+                diff_imgs = [diff_img(self.x_test[i], self._reconstructed_test[i]) for i in inds]
                 image = make_digit_mosaic(diff_imgs, mosaic_aspect=4.0)
             ax.imshow(image)
             ax.set_title(title, fontsize=12, color=color)
@@ -393,17 +362,20 @@ class DenseExperiment(AutoencoderExperiment):
             self._stage = stage
             logging.info("Running stage %i of %i", stage + 1, n_stages)
             self.train_more(n_epochs=n_epochs)
-            self._plot_history()
-            self.plot(show_diffs=False)
-            self.plot(show_diffs=True)
-            if not self._save_figs:
-                plt.show()
+            self._plot_stage()
+
+    def _plot_stage(self):
+        self._plot_history()
+        self.plot(show_diffs=False)
+        self.plot(show_diffs=True)
+        if not self._save_figs:
+            plt.show()
 
 
 def dense_demo():
     args = DenseExperiment.get_args("Train a dense autoencoder on MNIST data.")
     logging.info("Running Dense Autoencoder with args: %s", args)
-    de = DenseExperiment(enc_layers=args.layers)
+    de = DenseExperiment(enc_layers=args.layers, pca_dims=args.pca_dims)
     de.run_staged_experiment(n_stages=args.stages, n_epochs=args.epochs, save_figs=args.no_plot)
 
 
