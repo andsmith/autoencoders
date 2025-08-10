@@ -14,7 +14,7 @@ class AutoencoderExperiment(ABC):
     Base class for autoencoder experiments.
     """
 
-    def __init__(self, pca_dims=25, n_train_samples=0, bw_input=False):
+    def __init__(self, pca_dims, n_train_samples=0, bw_input=False):
         """
         Initialize the AutoencoderExperiment.
         :param pca_dims:
@@ -26,6 +26,8 @@ class AutoencoderExperiment(ABC):
         self.pca = PCA(dims=pca_dims)
         self.n_train_samples = n_train_samples
         self.pca_dims = self._load_data(binarize=bw_input)
+        self._init_model()
+
 
     @abstractmethod
     def _init_model(self):

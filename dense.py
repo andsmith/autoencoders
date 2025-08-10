@@ -19,7 +19,7 @@ class DenseExperiment(AutoencoderExperiment):
     _DEFAULT_ACT_FNS = {'internal': 'relu',
                         'encoding': 'relu'}
 
-    def __init__(self, enc_layers=(64,), act_fns=None, **kwargs):
+    def __init__(self, enc_layers=(64,), pca_dims=64, act_fns=None, **kwargs):
         """
         Initialize the Dense Experiment with a specified number of encoding units.
         :param enc_layers: list of layer sizes, final value is the encoding layer size.
@@ -33,8 +33,6 @@ class DenseExperiment(AutoencoderExperiment):
             self._history_dict = kwargs['history_dict']
             del kwargs['history_dict']
 
-        super().__init__(**kwargs)
-
         self.enc_layer_desc = enc_layers
         self.code_size = enc_layers[-1]
         self.act_fns = self._DEFAULT_ACT_FNS if act_fns is None else act_fns
@@ -46,9 +44,10 @@ class DenseExperiment(AutoencoderExperiment):
         if 'output' not in self.act_fns:
             # to resemble pixel values in [0, 1], probably don't change.
             self.act_fns['output'] = 'sigmoid'
-        self._d_in = self.pca.pca_dims
+        self._d_in = pca_dims
         self._d_out = 784
-        self._init_model()
+
+        super().__init__(pca_dims=pca_dims, **kwargs)
         logging.info("Experiment initialized:  %s" % self.get_name())
         if isinstance(self.encoder, Model):
             self.print_model_architecture(self.encoder, self.decoder, self.autoencoder)
