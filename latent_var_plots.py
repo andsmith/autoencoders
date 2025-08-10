@@ -3,6 +3,7 @@ from scipy.spatial import KDTree
 import matplotlib.pyplot as plt
 import logging
 import seaborn as sns
+from colors import COLORS, bgr2rgb
 
 
 class LatentDigitDist(object):
@@ -46,24 +47,23 @@ class LatentDigitDist(object):
         for digit in np.unique(self.digit_labels):
             digit_values = self.values[self.digit_labels == digit]
             self.stats['digits'][digit] = _mk_stats(digit_values)
-            if digit==2:
-                self.stats['digits'][2]['outliers'] = np.array([-.5,0.5])
+            if digit == 2:
+                self.stats['digits'][2]['outliers'] = np.array([-.5, 0.5])
 
         self.stats['total'] = _mk_stats(self.values)
 
     def render(self,
                image,
                bbox,
-               colors=None,
                digit_subset=None,
                thicknesses=(1, 3, 5),
                alphas=(.75, 0.65, 0.8, 1.0),
-               val_range=None, centered=True, orient='vertical'):
+               val_range=None, centered=True, orient='vertical',
+               show_axis=True, indent=False):
         """
         Render the latent digit distribution on the given image.
         :param image:  H x W x 3  uint8 array
         :param bbox:   Dictionary with 'x' and 'y' keys containing tuples (min, max)
-        :param colors:  Optional array of colors to use for each digit
         :param digit_subset: Optional list of digits to include in the plot
         :param thicknesses:  3-tuple, Line thicknesses for  3-sigma & outliers, IRQ, medians, respectively
         :param alphas:  4-tuple, Opacity values for the outliers, 3-sigma, IRQ, median respectively.
@@ -76,7 +76,10 @@ class LatentDigitDist(object):
         px_scale = height if orient == 'vertical' else width
         px_b_range = list(bbox['x'] if orient == 'vertical' else bbox['y'])
         px_a_range = list(bbox['y'] if orient == 'vertical' else bbox['x'])
-        locs = np.linspace(px_b_range[0], px_b_range[1], n_digits + 2)[1:-1]
+        if indent:
+            locs = np.linspace(px_b_range[0], px_b_range[1], n_digits + 2)[1:-1]
+        else:
+            locs = np.linspace(px_b_range[0], px_b_range[1], n_digits)
 
         # make sure they're evenly spaced
         smallest = np.min(np.diff(locs.astype(int)))
@@ -103,7 +106,6 @@ class LatentDigitDist(object):
                 x0 = int(px_a_range[0] + px_scale / 2.0 - t/2.0)
                 x1 = x0 + t
                 y0, y1 = px_b_range
-            logging.info("Drawing axis: (x0,x1,y0,y1)=%s", (x0, x1, y0, y1))
             color_shade = _fade_color(image[y0:y1, x0:x1], color, alpha)
             image[y0:y1, x0:x1] = color_shade
 
@@ -117,14 +119,13 @@ class LatentDigitDist(object):
                 thickness = thicknesses[0] if thickness is None else thickness
                 t = int(thickness * thick_mul)
                 t += (1 - t % 2)
-                x0 = int(x_loc - t/2)
+                x0 = int(x_loc)
                 x1 = x0 + t
 
                 y_vals = (_scale_value(values) + t/2).astype(int)-1
-                y_vals = np.clip(y_vals, px_a_range[0], px_a_range[1] - t)  # Ensure within 
+                y_vals = np.clip(y_vals, px_a_range[0], px_a_range[1] - t)  # Ensure within
 
-                
-                for y in y_vals.reshape(-1,1):
+                for y in y_vals.reshape(-1, 1):
                     small_y = int(y[0] - t/2.0-1)
                     big_y = small_y + t
 
@@ -142,7 +143,7 @@ class LatentDigitDist(object):
                 t = int(thickness * thick_mul)
                 t += (1 - t % 2)
 
-                x0 = int(x_loc - t / 2)
+                x0 = int(x_loc)
                 x1 = x0 + t
                 small_y = int(_scale_value(small))
                 big_y = int(_scale_value(big))
@@ -176,18 +177,19 @@ class LatentDigitDist(object):
         bkg_color = image[bbox['y'][0], bbox['x'][0], :]
         total_color = (0, 0, 0) if np.mean(bkg_color) > 128 else (255, 255, 255)
         total_color = np.array(total_color)
-        draw_axis(1, alpha=0.3, color=total_color)
+        if show_axis:
+            draw_axis(1, alpha=0.3, color=total_color)
 
         if digit_subset is None:
             for digit, x_pos in enumerate(locs):
 
-
                 _draw_dist(self.stats['digits'][digit], x_pos, self.colors[digit])
         else:
 
-            _draw_dist(self.stats['total'], locs[0], color=total_color, thick_mul=1.5)
+            _draw_dist(self.stats['total'], locs[0], color=total_color, thick_mul=1.0)
             for ds_ind, digit in enumerate(digit_subset):
-                _draw_dist(self.stats['digits'][digit], locs[ds_ind + 1], color=self.colors[digit])
+                digit_color = self.colors[ds_ind]
+                _draw_dist(self.stats['digits'][digit], locs[ds_ind + 1], color=digit_color)
 
         # Finally, return adjusted bbox
         if orient == 'vertical':
@@ -331,7 +333,7 @@ def test_latentdigitdist():
         for trial in range(n_bands * 2):
             rand_state[0] = np.random.RandomState(42)
 
-            #if trial == n_bands:
+            # if trial == n_bands:
 
             bbox = {'x': (x_offset, x_offset + width),
                     'y': (y_offset, y_offset + height)}
@@ -347,7 +349,7 @@ def test_latentdigitdist():
             if trial % 2 == 0:
                 kwargs['digit_subset'] = [0, 1, 3, 5, 8]
 
-            d_bbox=dist.render(image, bbox, orient=orient, **kwargs)[1]
+            d_bbox = dist.render(image, bbox, orient=orient, **kwargs)[1]
 
             draw_bbox(image, d_bbox, thickness=1, inside=True, color=(256-bkg_color))
 
@@ -364,14 +366,91 @@ def test_latentdigitdist():
     show_test(image2, 'horizontal')
 
 
+def calc_scale(n_pixels, n_plots):
+    if n_plots < 16:
+        t = 5
+    elif n_plots < 32:
+        t = 3
+    else:
+        t = 3
+    # Keep thickness odd!
+    height = int(t*3)
+    pad = int(max(3,t*2))
+    return height, t, pad   
+
+
+def test_latent_compact():
+    """
+
+
+    TODO:  MOVE TO CLASS
+
+
+
+    Create an image comparing VAE latent variable distributions.
+    Each column is a model, under it are horizontally oriented LatentDigitDist plots of
+        each latent variable in that model .
+    """
+    model_sizes = [1, 4, 8, 16, 32, 64,]
+    grid_shape = np.array((1, len(model_sizes)))
+    model_data = [[_mk_data(500) for _ in range(n)] for n in model_sizes]
+    image_size = np.array((1800, 900))
+    blank = np.zeros((image_size[1], image_size[0], 3), dtype=np.uint8)
+    bkg_color = np.array(COLORS['OFF_WHITE_RGB'])
+    blank[:] = bkg_color
+    dist_size_wh = np.array((200, 13))  # each LatentDigitDist plot
+    digit_subset = [1, 3, 8]
+
+    colors = [COLORS['MPL_BLUE_RGB'],
+              COLORS['MPL_ORANGE_RGB'],
+              COLORS['MPL_GREEN_RGB']]
+    colors = [np.array(c) for c in colors]
+    
+    for i, (model, data) in enumerate(zip(model_sizes, model_data)):
+        height, t, pad_y = calc_scale(dist_size_wh[1], model)
+        print(height, t, pad_y)
+
+        model_pad_x = ((image_size[0] - grid_shape[1] * dist_size_wh[0]) / (grid_shape[1] + 1))
+
+        x = int(i * (dist_size_wh[0] + model_pad_x) + model_pad_x)
+        y = 10
+        for j, latent_data in enumerate(data):
+
+            bbox = {'x': (x, x + dist_size_wh[0]), 'y': (y, y + height)}
+
+            bottom = bbox['y'][1]
+
+            try:
+
+                d_bbox = LatentDigitDist(*latent_data, colors=colors).render(blank, bbox, orient='horizontal',
+                                                                             centered=True, show_axis=False,
+                                                                             # [.8, .64,.75,.85],
+                                                                             thicknesses=[
+                                                                                 t, t, t], alphas=[.2, .5, .5, 1],
+                                                                             digit_subset=digit_subset)[1]
+                bottom = d_bbox['y'][1]
+                
+                #draw_bbox(blank, d_bbox, thickness=1, inside=True, color=(256 - bkg_color))
+            except Exception as e:
+                # raise e
+                break
+
+            y = bottom + pad_y
+    plt.imshow(blank)
+    plt.gca().set_axis_off()
+    plt.tight_layout()
+    plt.show()
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     # test_make_random_cov(n_points=10000, plot=True)
     # test_make_data(d=2, plot=True)
 
     test_latentdigitdist()
+    test_latent_compact()
 
-    #test()
+    # test()
 
     # Uncomment to test with higher dimensions
     # test_make_data(d=10, plot=True)
