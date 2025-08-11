@@ -21,7 +21,7 @@ class DenseExperiment(AutoencoderExperiment):
     _DEFAULT_ACT_FNS = {'internal': 'relu',
                         'encoding': 'relu'}
 
-    def __init__(self, enc_layers=(64,), pca_dims=64, act_fns=None, **kwargs):
+    def __init__(self, enc_layers=(64,), pca_dims=64, whiten_input=True, act_fns=None, **kwargs):
         """
         Initialize the Dense Experiment with a specified number of encoding units.
         :param enc_layers: list of layer sizes, final value is the encoding layer size.
@@ -29,7 +29,6 @@ class DenseExperiment(AutoencoderExperiment):
         :param act_fns: Dictionary of activation functions for internal, encoding, and output layers.
                         If None, uses default activation functions.
         """
-
         self._history_dict = None
         if 'history_dict' in kwargs:
             self._history_dict = kwargs['history_dict']
@@ -49,14 +48,14 @@ class DenseExperiment(AutoencoderExperiment):
         self._d_in = pca_dims
         self._d_out = 784
 
-        super().__init__(pca_dims=pca_dims, **kwargs)
+        super().__init__(pca_dims=pca_dims, whiten_input=whiten_input, **kwargs)
         logging.info("Experiment initialized:  %s" % self.get_name())
         if isinstance(self.encoder, Model):
             self.print_model_architecture(self.encoder, self.decoder, self.autoencoder)
 
     def get_name(self, file_ext=None, suffix=None):
         desc_str = "-".join([str(n) for n in self.enc_layer_desc])
-        pca_str = "PCA=%i" % self.pca_dims
+        pca_str = self.pca.get_short_name()
         fname = ("Dense(%s_units=%s_encode=%s_internal=%s)" %
                  (pca_str, desc_str, self.act_fns['encoding'], self.act_fns['internal']))
 
