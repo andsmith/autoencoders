@@ -55,7 +55,7 @@ class DenseExperiment(AutoencoderExperiment):
             self.print_model_architecture(self.encoder, self.decoder, self.autoencoder)
 
     def get_name(self, file_ext=None, suffix=None):
-        desc_str = "_".join([str(n) for n in self.enc_layer_desc])
+        desc_str = "-".join([str(n) for n in self.enc_layer_desc])
         pca_str = "PCA=%i" % self.pca_dims
         fname = ("Dense(%s_units=%s_encode=%s_internal=%s)" %
                  (pca_str, desc_str, self.act_fns['encoding'], self.act_fns['internal']))
@@ -184,13 +184,15 @@ class DenseExperiment(AutoencoderExperiment):
         :return: A dictionary with parsed parameters.
         """
         file = os.path.split(filename)[1]
-        pattern = r'Dense\((.*?)_encode=(.*?)_internal=(.*?)\)\.weights\.h5'
+        pattern = r'Dense\(PCA=(\d+)_units=(.*?)_encode=(.*?)_internal=(.*?)\)\.weights\.h5'
         match = re.match(pattern, file)
         if match:
-            enc_layers = tuple(map(int, match.group(1).split(',')))
-            encoding_act_fn = match.group(2)
-            internal_act_fn = match.group(3)
+            pca_dim_param = int(match.group(1))
+            enc_layers = tuple(map(int, match.group(2).split(',')))
+            encoding_act_fn = match.group(3)
+            internal_act_fn = match.group(4)
             return {
+                'pca_dim': pca_dim_param,
                 'enc_layers': enc_layers,
                 'encoding_act_fn': encoding_act_fn,
                 'internal_act_fn': internal_act_fn,
@@ -201,7 +203,7 @@ class DenseExperiment(AutoencoderExperiment):
     @staticmethod
     def from_filename(filename):
         params = DenseExperiment.parse_filename(filename)
-        network = DenseExperiment(
+        network = DenseExperiment(pca_dims=params['pca_dim'],
             enc_layers=params['enc_layers'],
             act_fns={
                 'encoding': params['encoding_act_fn'],

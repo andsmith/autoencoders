@@ -1,3 +1,5 @@
+import pickle
+import cv2
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,13 +11,12 @@ import logging
 import re
 from matplotlib.gridspec import GridSpec
 from colors import COLORS
-from img_util import make_digit_mosaic, make_img,diff_img
+from img_util import make_digit_mosaic, make_img, diff_img
 from latent_var_plots import LatentDigitDist
 import time
 from experiment import AutoencoderExperiment
-WORKING_DIR= "VAE-results"
-import cv2
-import pickle
+WORKING_DIR = "VAE-results"
+
 
 class Encoder(nn.Module):
     def __init__(self, input_dim, hidden_dims, latent_dim):
@@ -36,6 +37,7 @@ class Encoder(nn.Module):
         log_var = self.fc_logvar(x)
         return mu, log_var
 
+
 class Decoder(nn.Module):
     def __init__(self, latent_dim, hidden_dims, output_dim):
         super().__init__()
@@ -53,6 +55,7 @@ class Decoder(nn.Module):
             z = self.relu(layer(z))
         recon_x = self.sigmoid(self.fc3(z))
         return recon_x
+
 
 class VAE(nn.Module):
     def __init__(self, input_dim, hidden_dims, latent_dim, output_dim, device, lambda_reg=0.001):
@@ -77,10 +80,9 @@ class VAE(nn.Module):
         recon_x = self.decoder(z)
         return recon_x, mu, log_var
 
-
-    def loss_function(self, recon_y, y_batch, mu, log_var, return_terms =False):
+    def loss_function(self, recon_y, y_batch, mu, log_var, return_terms=False):
         MSE = F.mse_loss(recon_y, y_batch, reduction='mean')
-        KLD = -0.5 * torch.mean(1 + log_var - mu.pow(2) - log_var.exp()) 
+        KLD = -0.5 * torch.mean(1 + log_var - mu.pow(2) - log_var.exp())
         total_loss = (1-self.lambda_reg) * MSE + (self.lambda_reg) * KLD
         if return_terms:
             return total_loss, MSE, KLD
@@ -93,7 +95,7 @@ class VAE(nn.Module):
         with torch.no_grad():
             recon_x, _, _ = self(x_flat)
         return recon_x.cpu().numpy()
-    
+
     def encode(self, x):
         self.eval()
         x_tensor = torch.from_numpy(x).to(self.device).float()
@@ -102,7 +104,7 @@ class VAE(nn.Module):
             mu, log_var = self.encoder(x_flat)
             z = self.reparameterize(mu, log_var)
         return z.cpu().numpy()
-    
+
     def decode(self, x):
         self.eval()
         z_tensor = torch.from_numpy(x).to(self.device).float()
@@ -110,8 +112,9 @@ class VAE(nn.Module):
             recon_x = self.decoder(z_tensor)
         return recon_x.cpu().numpy()
 
+
 class VAEExperiment(AutoencoderExperiment):
-    def __init__(self, pca_dims, enc_layers, d_latent, reg_lambda=0.001,batch_size=256, **kwargs):
+    def __init__(self, pca_dims, enc_layers, d_latent, reg_lambda=0.001, batch_size=256, **kwargs):
         self.device = torch.device(kwargs.get("device", "cpu"))
         self.enc_layer_desc = enc_layers
         self.batch_size = batch_size
@@ -141,42 +144,46 @@ class VAEExperiment(AutoencoderExperiment):
         logging.info("Initialized VAEExperiment:  %s" % (self.get_name(),))
 
     def get_name(self, file_kind=None, suffix=None):
-        
+
         dim_str = "-".join(map(str, self.enc_layer_desc))
-        root= ("VAE-TORCH(pca=%i_hidden=%s_d-latent=%i_reg-lambda=%.5f)" % (self._d_in, dim_str, self.code_size, self.reg_lambda))
+        root = ("VAE-TORCH(pca=%i_hidden=%s_d-latent=%i_reg-lambda=%.5f)" %
+                (self._d_in, dim_str, self.code_size, self.reg_lambda))
 
         if suffix is not None:
             root = "%s_%s" % (root, suffix)
-            
-        if file_kind=='weights':
+
+        if file_kind == 'weights':
             return os.path.join(WORKING_DIR, root + ".weights")
-        elif file_kind =='image':
+        elif file_kind == 'image':
             return os.path.join(WORKING_DIR, root + ".image.png")
         elif file_kind == 'history':
             return os.path.join(WORKING_DIR, root + ".history.pkl")
 
         return root
 
-
     @staticmethod
-    def from_filename(cls, filename):
+    def from_filename(filename):
+        print("\n\n\n%s\n\n" % (filename,))
         match = re.match(r"VAE-TORCH\(pca=(\d+)_hidden=([\d\-]+)_d-latent=(\d+)_reg-lambda=(\d+\.\d+)\)", filename)
         if not match:
             raise ValueError(f"Filename {filename} is not in the expected format.")
-        enc_layers = list(map(int, match.group(1).split('-')))
-        d_latent = int(match.group(2))
-        reg_lambda = float(match.group(3))
-        n_epochs = int(match.group(4))
-        return cls(enc_layers, d_latent, reg_lambda, n_epochs)
+
+        pca_dims = int(match.group(1))
+        enc_layers = list(map(int, match.group(2).split('-')))
+        d_latent = int(match.group(3))
+        reg_lambda = float(match.group(4))
+        n_epochs = int(match.group(5))
+        return VAEExperiment(pca_dims=pca_dims, enc_layers=enc_layers, d_latent=d_latent,
+                             reg_lambda=reg_lambda, n_epochs=n_epochs)
 
     def _init_model(self):
-        self.model = VAE(input_dim=self._d_in, 
-                         hidden_dims=self.enc_layer_desc, 
-                         latent_dim=self.code_size, 
-                         output_dim=self._d_out, 
+        self.model = VAE(input_dim=self._d_in,
+                         hidden_dims=self.enc_layer_desc,
+                         latent_dim=self.code_size,
+                         output_dim=self._d_out,
                          device=self.device,
                          lambda_reg=self.reg_lambda).to(self.device)
-        
+
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
 
     def train_more(self, epochs=25):
@@ -198,12 +205,12 @@ class VAEExperiment(AutoencoderExperiment):
             self.model.train()
             train_losses = []
             train_loss_terms = {'kld': [], 'mse': []}
-            for i,(x_batch, y_batch) in enumerate(train_loader):
+            for i, (x_batch, y_batch) in enumerate(train_loader):
                 x_batch = x_batch.to(self.device)
                 y_batch = y_batch.to(self.device)
                 self.optimizer.zero_grad()
                 recon_y, mu, log_var = self.model(x_batch)
-                loss, MSE ,KLD = self.model.loss_function(recon_y, y_batch, mu, log_var, return_terms=True)
+                loss, MSE, KLD = self.model.loss_function(recon_y, y_batch, mu, log_var, return_terms=True)
                 train_loss_terms['kld'].append(KLD.item())
                 train_loss_terms['mse'].append(MSE.item())
                 loss.backward()
@@ -212,7 +219,7 @@ class VAEExperiment(AutoencoderExperiment):
             avg_train_loss = np.mean(train_losses)
             self._history_dict['train-loss'].append(avg_train_loss)
             self._history_dict['train-mse'].append(np.mean(train_loss_terms['mse']))
-            self._history_dict['train-kld'].append(np.mean(train_loss_terms['kld']))    
+            self._history_dict['train-kld'].append(np.mean(train_loss_terms['kld']))
             self.model.eval()
             test_losses = []
             test_loss_terms = {'kld': [], 'mse': []}
@@ -231,12 +238,12 @@ class VAEExperiment(AutoencoderExperiment):
             self._history_dict['val-mse'].append(np.mean(test_loss_terms['mse']))
             self._history_dict['val-kld'].append(np.mean(test_loss_terms['kld']))
             self._history_dict['lambda'].append(self.model.lambda_reg)
-            print(f"Epoch {epoch+1}/{epochs} ({duration:.4f}s), "+
-                  f"Training Loss: {avg_train_loss:.4f},"+
-                  f"(MSE: {self._history_dict['train-mse'][-1]:.4f}, "+
-                  f"KLD: {self._history_dict['train-kld'][-1]:.4f}), "+
-                  f"Test Loss: {avg_test_loss:.4f}  "+
-                  f"(MSE: {self._history_dict['val-mse'][-1]:.4f}, "+
+            print(f"Epoch {epoch+1}/{epochs} ({duration:.4f}s), " +
+                  f"Training Loss: {avg_train_loss:.4f}," +
+                  f"(MSE: {self._history_dict['train-mse'][-1]:.4f}, " +
+                  f"KLD: {self._history_dict['train-kld'][-1]:.4f}), " +
+                  f"Test Loss: {avg_test_loss:.4f}  " +
+                  f"(MSE: {self._history_dict['val-mse'][-1]:.4f}, " +
                   f"KLD: {self._history_dict['val-kld'][-1]:.4f})")
 
         self.save_weights()
@@ -273,16 +280,16 @@ class VAEExperiment(AutoencoderExperiment):
 
     def decode_samples(self, z):
         return self.model.decode(x=z)
+
     def save_weights(self):
-        filename=self.get_name(file_kind='weights')
+        filename = self.get_name(file_kind='weights')
         torch.save(self.model.state_dict(), filename)
         logging.info("Saved model weights to %s", filename)
 
     def load_weights(self):
-        filename=self.get_name(file_kind='weights')
-        self.model.load_state_dict(torch.load(filename, map_location=self.device,weights_only=True))
+        filename = self.get_name(file_kind='weights')
+        self.model.load_state_dict(torch.load(filename, map_location=self.device, weights_only=True))
         logging.info("Loaded model weights from %s", filename)
-
 
     def _plot_code_samples(self, n_samp=39):
         """
@@ -293,27 +300,27 @@ class VAEExperiment(AutoencoderExperiment):
         drawn over a thick line spanning the interquartile range (IQR), and a dot representing the median.
         outliers are drawn as single pixels.
         """
-        image_size_wh=300,1200
+        image_size_wh = 300, 1200
         dist_width = 250
         blank = np.zeros((image_size_wh[1], image_size_wh[0], 3), dtype=np.uint8)
         blank[:] = np.array(COLORS['OFF_WHITE_RGB'], dtype=np.uint8)
         codes = self._encoded_test
         n_code_units = codes.shape[1]
         digit_labels = self.y_test
-        
+
         digit_subset = [1, 3, 8]
         colors = [COLORS['MPL_BLUE_RGB'],
-                COLORS['MPL_ORANGE_RGB'],
-                COLORS['MPL_GREEN_RGB']]
+                  COLORS['MPL_ORANGE_RGB'],
+                  COLORS['MPL_GREEN_RGB']]
 
         colors = [np.array(c) for c in colors]
-        height, t, pad_y = 12, 3, 9 # calc_scale(None, n_code_units)
+        height, t, pad_y = 12, 3, 9  # calc_scale(None, n_code_units)
         print(height, t, pad_y)
 
-        unit_dists = [LatentDigitDist(codes[:, code_unit], digit_labels,colors=colors) for code_unit in range(n_code_units)]
-        img = np.zeros((1000,1000,3),dtype=np.uint8)
-            
-    
+        unit_dists = [LatentDigitDist(codes[:, code_unit], digit_labels, colors=colors)
+                      for code_unit in range(n_code_units)]
+        img = np.zeros((1000, 1000, 3), dtype=np.uint8)
+
         x = 25
         y = 10
         for unit, unit_dists in enumerate(unit_dists):
@@ -322,29 +329,29 @@ class VAEExperiment(AutoencoderExperiment):
             try:
 
                 d_bbox = unit_dists.render(blank, bbox, orient='horizontal',
-                                            centered=True, show_axis=False,
-                                            thicknesses=[
-                                                t, t, t], alphas=[.2, .5, .5, 1],
-                                            digit_subset=digit_subset)[1]
-                
+                                           centered=True, show_axis=False,
+                                           thicknesses=[
+                                               t, t, t], alphas=[.2, .5, .5, 1],
+                                           digit_subset=digit_subset)[1]
+
                 bottom = d_bbox['y'][1]
-                
-                #draw_bbox(blank, d_bbox, thickness=1, inside=True, color=(256 - bkg_color))
+
+                # draw_bbox(blank, d_bbox, thickness=1, inside=True, color=(256 - bkg_color))
             except Exception as e:
                 # raise e
                 break
 
             y = bottom + pad_y
-        fig, ax = plt.subplots(figsize=(5,8))
+        fig, ax = plt.subplots(figsize=(5, 8))
         ax.imshow(blank)
         ax.axis('off')
         plt.suptitle("Latent Variable Distributions for %i Code Units" % n_code_units, fontsize=14)
         plt.tight_layout()
 
     def _eval(self):
-        #nimport ipdb; ipdb.set_trace()
         self._encoded_test = self.encode_samples(self.x_test)
         self._reconstructed_test = self.decode_samples(self._encoded_test)
+
         def mse_err(imageA, imageB):
             err = np.sum((imageA.astype("float") - imageB.astype("float")) ** 2)
             err /= float(imageA.shape[0])
@@ -380,7 +387,7 @@ class VAEExperiment(AutoencoderExperiment):
     def _plot_history(self):
         height_ratios = [3, 3, 3, 1]
         fig, ax = plt.subplots(nrows=4, ncols=1, figsize=(8, 10),
-                                 gridspec_kw={'height_ratios': height_ratios})
+                               gridspec_kw={'height_ratios': height_ratios})
         ax[0].plot(self._history_dict['train-loss'], label='Train Loss')
         ax[0].plot(self._history_dict['val-loss'], label='Validation Loss')
         ax[0].set_title('Loss history', fontsize=12)
@@ -403,9 +410,9 @@ class VAEExperiment(AutoencoderExperiment):
         ax[3].set_title('lambda history', fontsize=12)
         ax[3].set_xlabel('Epoch', fontsize=10)
         ax[3].set_ylabel('lambda', fontsize=10)
-        #grid
+        # grid
 
-        #turn off x-axis for all but bottom plots:
+        # turn off x-axis for all but bottom plots:
         for i in range(len(ax)-1):
             ax[i].set_xticklabels([])
             ax[i].grid(True)
@@ -429,27 +436,26 @@ class VAEExperiment(AutoencoderExperiment):
         """
         digit_subset = [1, 3, 8]
 
-        
-        image_size_wh=300,1200
+        image_size_wh = 300, 1200
         dist_width = 250
         blank = np.zeros((image_size_wh[1], image_size_wh[0], 3), dtype=np.uint8)
         blank[:] = np.array(COLORS['OFF_WHITE_RGB'], dtype=np.uint8)
         codes = self._encoded_test
         n_code_units = codes.shape[1]
         digit_labels = self.y_test
-        
+
         colors = [COLORS['MPL_BLUE_RGB'],
-                COLORS['MPL_ORANGE_RGB'],
-                COLORS['MPL_GREEN_RGB']]
+                  COLORS['MPL_ORANGE_RGB'],
+                  COLORS['MPL_GREEN_RGB']]
 
         colors = [np.array(c) for c in colors]
-        height, t, pad_y = 12, 3, 9 # calc_scale(None, n_code_units)
+        height, t, pad_y = 12, 3, 9  # calc_scale(None, n_code_units)
         print(height, t, pad_y)
 
-        unit_dists = [LatentDigitDist(codes[:, code_unit], digit_labels,colors=colors) for code_unit in range(n_code_units)]
-        img = np.zeros((1000,1000,3),dtype=np.uint8)
-            
-    
+        unit_dists = [LatentDigitDist(codes[:, code_unit], digit_labels, colors=colors)
+                      for code_unit in range(n_code_units)]
+        img = np.zeros((1000, 1000, 3), dtype=np.uint8)
+
         x = 25
         y = 10
         for unit, unit_dists in enumerate(unit_dists):
@@ -458,32 +464,30 @@ class VAEExperiment(AutoencoderExperiment):
             try:
 
                 d_bbox = unit_dists.render(blank, bbox, orient='horizontal',
-                                            centered=True, show_axis=False,
-                                            thicknesses=[
-                                                t, t, t], alphas=[.2, .5, .5, 1],
-                                            digit_subset=digit_subset)[1]
-                
+                                           centered=True, show_axis=False,
+                                           thicknesses=[
+                                               t, t, t], alphas=[.2, .5, .5, 1],
+                                           digit_subset=digit_subset)[1]
+
                 bottom = d_bbox['y'][1]
-                
-                #draw_bbox(blank, d_bbox, thickness=1, inside=True, color=(256 - bkg_color))
+
+                # draw_bbox(blank, d_bbox, thickness=1, inside=True, color=(256 - bkg_color))
             except Exception as e:
                 # raise e
                 break
 
             y = bottom + pad_y
-        fig, ax = plt.subplots(figsize=(5,8))
+        fig, ax = plt.subplots(figsize=(5, 8))
         ax.imshow(blank)
         ax.axis('off')
         plt.suptitle("Code unit distributions (black shows all units, color shows digits: %s)\n%s" % (
             ", ".join(str(d) for d in digit_subset), self.get_name()), fontsize=14)
-        
+
         suffix = "LatentDist_stage=%i" % (self._stage+1)
         filename = self.get_name(file_kind='image', suffix=suffix)
-        #self._maybe_save_fig(fig, filename)
+        # self._maybe_save_fig(fig, filename)
         if self._save_figs:
             cv2.imwrite(filename, blank)
-
-
 
     def _plot_encoding_errors(self, n_samp=39, show_diffs=False):
 
@@ -541,11 +545,9 @@ class VAEExperiment(AutoencoderExperiment):
         plt.suptitle(title, fontsize=14)
         self._show_err_hist(hist_axis, q_labels, colors)
 
-
-        suffix = "EncErrs_stage=%i" % (self._stage,)
+        suffix = "decoded-diffs_stage=%i" % (self._stage,) if show_diffs else "decoded-images_stage=%i" % (self._stage,)
         filename = self.get_name(file_kind='image', suffix=suffix)
         self._maybe_save_fig(fig, filename)
-
 
     def _show_err_hist(self, ax, labels, band_colors):
         ax.hist(self._mse_errors, bins=100, color='gray', alpha=0.8)
@@ -563,14 +565,14 @@ class VAEExperiment(AutoencoderExperiment):
             draw_band(ax, i, band_colors[i], label)
         # ax.legend(loc='upper center', fontsize=10)
 
-
-
     # Add plotting methods as needed to match DenseExperiment
+
 
 def vae_demo():
     args = VAEExperiment.get_args("Train a variational autoencoder on MNIST data.",
                                   extra_args=[
-                                          dict(name='--batch_size', type=int, default=256, help="Batch size for training (Default 256)"),
+                                      dict(name='--batch_size', type=int, default=256,
+                                           help="Batch size for training (Default 256)"),
                                       dict(name='--reg_lambda', type=float, default=0.01,
                                            help='Regularization parameter for VAE (default: 0.01)'),
                                       dict(name='--d_latent', type=int, default=16,
@@ -585,6 +587,7 @@ def vae_demo():
         pca_dims=args.pca_dims,
     )
     ve.run_staged_experiment(n_stages=args.stages, n_epochs=args.epochs, save_figs=args.no_plot)
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
