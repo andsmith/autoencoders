@@ -3,6 +3,8 @@
 *.json
 *.png
 *.tgz
+*.weights
+*_bkp
 *.bat
 # Byte-compiled / optimized / DLL files
 __pycache__/

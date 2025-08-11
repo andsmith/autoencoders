@@ -14,11 +14,13 @@ properties of the original (latent) distribution.
 """
 
 import numpy as np
+from shapely import points
 from sklearn.manifold import TSNE, MDS
 from sklearn.decomposition import PCA
 import umap
 from abc import ABC, abstractmethod
 import logging
+import pickle
 
 
 class Embedding(ABC):
@@ -27,26 +29,37 @@ class Embedding(ABC):
     Calculated embeddings will map all initial points so they fill the unit square.
     """
 
-    def __init__(self, points, inputs=None, class_labels=None):
+    def __init__(self):  # , points, inputs=None, class_labels=None):
         """
         Initialize the embedding with a set of points.
         :param points: array of shape (n_samples, n_features), points in latent space.
 
         :param class_labels: optional array of shape (n_samples,), int in range 0 -- n_classes-1.
         """
-        self.points = points
-        self.inputs = inputs
-        self.class_labels = class_labels
-        points_2d_unscaled = self._calc_embedding()
+        self.embedder, self.scale = None, None
+
+    def fit_embed(self, points):
+        self.embedder, points_2d_unscaled = self._calc_embedding(points)
         self.scale = self._calc_scale(points_2d_unscaled)
-        self.points_2d = self._scale_points(points_2d_unscaled)
+        points_2d = self._scale_points(points_2d_unscaled)
+        return points_2d
 
     @abstractmethod
-    def _calc_embedding(self):
+    def get_name(self):
         """
-        Calculate the embedding of the points.
-        This method should be implemented by subclasses.
-        :return: array of shape (n_samples, 2), embedded points in 2D space.
+        Return a short string (can be used as part of a filename) with all relevant parameters
+        to reconstruct.
+        """
+        pass
+
+    @abstractmethod
+    def _calc_embedding(self, points):
+        """
+        Calculate the 2d embedding of the points.
+
+        :return: tuple with
+          - the embedder object, and
+          - array of shape (n_samples, 2), embedded points in 2D space.
         """
         pass
 
@@ -59,7 +72,27 @@ class Embedding(ABC):
         """
         pass
 
+    def _check(self):
+        if self.embedder is None:
+            raise Exception("Don't call this before fitting.")
+
+    def get_file_suffix(self):
+        return "embedding=%s.pkl" % (self.get_name(),)
+
+    def save(self, file_root):
+        self._check()
+        filename = "%s_%s" % (file_root, self.get_file_suffix())
+        with open(filename, "wb") as f:
+            pickle.dump(self, f)
+        return filename
+
+    @staticmethod
+    def from_file(filename):
+        with open(filename, "rb") as f:
+            return pickle.load(f)
+
     def embed_points(self, points):
+        self._check()
         return self._scale_points(self._embed_points(points))
 
     def _calc_scale(self, points):
@@ -81,6 +114,7 @@ class Embedding(ABC):
         :return: array of shape (n_points, 2), embedded points along the path in the embedding space
                  array of shape (n_points, n_features), points along the path in latent space
         """
+        self._check()
         t = np.linspace(0, 1, n_points)
         path = start + t[:, np.newaxis] * (end - start)
         return self.embed_points(path), path
@@ -100,6 +134,7 @@ class Embedding(ABC):
         :return: array of shape (n_points, 2), embedded points along the extrapolated line
                  array of shape (n_points, n_features), feature-space points along the extrapolated line
         """
+        self._check()
         length = np.linalg.norm(vec)
         direction = vec / length
         endpoint = start + direction * length_factor * length
@@ -131,6 +166,7 @@ class Embedding(ABC):
         scaled_points[:, 1] = (points[:, 1] - bbox['y'][0]) * scale_y
         return scaled_points
 
+
 class PassThroughEmbedding(Embedding):
     """
     A trivial embedding that does not change the points, uses first two dimensions
@@ -138,11 +174,36 @@ class PassThroughEmbedding(Embedding):
     Useful for testing and debugging.
     """
 
-    def _calc_embedding(self):
-        return self.points[:, :2]
+    def get_name(self):
+        return "First2Dims()"
+
+    def _calc_embedding(self, points):
+        # Can't return None as the embedder since we will look uninitialized.
+        return 0, points[:, :2]
 
     def _embed_points(self, points):
         return points[:, :2]
+
+
+class RandomProjectionEmbedding(Embedding):
+    """
+    Embedding using random projection to reduce the dimensionality of the points to 2D.
+    """
+
+    def get_name(self):
+        return "RandomProjection(2)"
+
+    def _calc_embedding(self, points):
+        """
+        Get 2 random directions (parent class will scale everything)
+        """
+        vecs = np.random.randn(points.shape[1], 2).reshape(-1, 2)
+        vecs = vecs / np.linalg.norm(vecs, axis=1, keepdims=True)
+        rp = points @ vecs
+        return vecs, rp
+
+    def _embed_points(self, points):
+        return points @ self.embedder
 
 
 class PCAEmbedding(Embedding):
@@ -150,47 +211,63 @@ class PCAEmbedding(Embedding):
     Embedding using PCA to reduce the dimensionality of the points to 2D.
     """
 
-    def _calc_embedding(self):
-        logging.info("Calculating PCA embedding for %d points", self.points.shape[0])
+    def get_name(self):
+        return "PCA(2)"
+
+    def _calc_embedding(self, points):
+        logging.info("Calculating PCA embedding for %d points", points.shape[0])
         pca = PCA(n_components=2)
-        return pca.fit_transform(self.points)
+        return pca, pca.fit_transform(points)
 
     def _embed_points(self, points):
-        pca = PCA(n_components=2)
-        return pca.fit_transform(points)
+        return self.embedder.transform(points)
+
 
 class UMAPEmbedding(Embedding):
     """
     Embedding using UMAP to reduce the dimensionality of the points to 2D.
     """
 
-    def _calc_embedding(self):
-        logging.info("Calculating UMAP embedding for %d points", self.points.shape[0])
-        self.reducer = umap.UMAP(n_components=2)
-        logging.info("\tFinished UMAP embedding.")
-        pts_2d = self.reducer.fit_transform(self.points)
-        logging.info("\tEmbedded training set.")
-        return pts_2d
+    def __init__(self, neighbors=5):
+        self.neighbors = neighbors
+        super().__init__()
+
+    def get_name(self):
+        return "UMAP(2)"
+
+    def _calc_embedding(self, points):
+        logging.info("Calculating UMAP embedding for %d points", points.shape[0])
+        reducer = umap.UMAP(n_neighbors=self.neighbors, n_components=2)
+        logging.info("\tFinished UMAP embedding... embedding training set...")
+        pts_2d = reducer.fit_transform(points)
+        logging.info("\tdone.")
+        return reducer, pts_2d
 
     def _embed_points(self, points):
-        return self.reducer.transform(points)
+        return self.embedder.transform(points)
+
 
 class TSNEEmbedding(Embedding):
     """
     Embedding using t-SNE to reduce the dimensionality of the points to 2D.
     """
-    def __init__(self, points, perplexity=30.0):
-        self.perplexity = perplexity
-        super().__init__(points)
 
-    def _calc_embedding(self):
-        logging.info("Calculating t-SNE embedding for %d points with perplexity %.2f"%( self.points.shape[0], self.perplexity))
-        self.tsne = TSNE(n_components=2, perplexity=self.perplexity)
+    def __init__(self, perplexity=30.0):
+        self.perplexity = perplexity
+        super().__init__()
+
+    def get_name(self):
+        return "t-SNE(perplexity=%.1f)" % (self.perplexity,)
+
+    def _calc_embedding(self, points):
+        logging.info("Calculating t-SNE embedding for %d points with perplexity %.2f" %
+                     (points.shape[0], self.perplexity))
+        tsne = TSNE(n_components=2, perplexity=self.perplexity)
         logging.info("\tFinished t-SNE embedding.")
-        pts_2d = self.tsne.fit_transform(self.points)
+        pts_2d = tsne.fit_transform(points)
         logging.info("\tEmbedded training set.")
 
-        return pts_2d
+        return tsne, pts_2d
 
     def _embed_points(self, points):
         return self.tsne.transform(points)

@@ -61,9 +61,10 @@ class AutoencoderExperiment(ABC):
         _print_part(model, "\nFull Model Architecture:")
         print("\n\n\n")
 
-    def encode_samples(self, samples):
-        pca_samples = self.pca.encode(samples)
-        return self._encode_samples(pca_samples)
+    def encode_samples(self, samples, raw=True):
+        if raw:
+            samples = self.pca.encode(samples)
+        return self._encode_samples(samples)
 
     @abstractmethod
     def _encode_samples(self, samples):
@@ -93,7 +94,7 @@ class AutoencoderExperiment(ABC):
 
     @staticmethod
     @abstractmethod
-    def from_filename(cls, filename):
+    def from_filename(filename):
         """
         Parse the arcitecture of the autoencoder from the filename and
         create one, load its weights.

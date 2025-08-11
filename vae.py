@@ -163,7 +163,7 @@ class VAEExperiment(AutoencoderExperiment):
 
     @staticmethod
     def from_filename(filename):
-        print("\n\n\n%s\n\n" % (filename,))
+        filename = os.path.basename(filename)
         match = re.match(r"VAE-TORCH\(pca=(\d+)_hidden=([\d\-]+)_d-latent=(\d+)_reg-lambda=(\d+\.\d+)\)", filename)
         if not match:
             raise ValueError(f"Filename {filename} is not in the expected format.")
@@ -172,9 +172,8 @@ class VAEExperiment(AutoencoderExperiment):
         enc_layers = list(map(int, match.group(2).split('-')))
         d_latent = int(match.group(3))
         reg_lambda = float(match.group(4))
-        n_epochs = int(match.group(5))
         return VAEExperiment(pca_dims=pca_dims, enc_layers=enc_layers, d_latent=d_latent,
-                             reg_lambda=reg_lambda, n_epochs=n_epochs)
+                             reg_lambda=reg_lambda)
 
     def _init_model(self):
         self.model = VAE(input_dim=self._d_in,
