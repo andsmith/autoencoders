@@ -1,5 +1,5 @@
 from posixpath import sep
-from embeddings import PassThroughEmbedding, PCAEmbedding, UMAPEmbedding, TSNEEmbedding
+from embeddings import PassThroughEmbedding, PCAEmbedding, UMAPEmbedding, TSNEEmbedding, RandomProjectionEmbedding
 import logging
 import numpy as np
 import matplotlib.pyplot as plt
@@ -40,18 +40,15 @@ def test_embedding(embedding_class, dataset,ax=None):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    dataset = TestDataset(d=10, n_points=500, n_clusters=10, separability=1.0)
-    fig, ax = plt.subplots(2, 2, figsize=(10, 10))
+    dataset = TestDataset(d=10, n_points=2000, n_clusters=10, separability=1.15)
+    fig, ax = plt.subplots(2, 3, figsize=(10, 10))
     test_embedding(PassThroughEmbedding, dataset, ax=ax[0,0])
     test_embedding(PCAEmbedding, dataset, ax=ax[0,1])
-    test_embedding(UMAPEmbedding, dataset, ax=ax[1,0])
-    test_embedding(TSNEEmbedding, dataset, ax=ax[1,1])
+    test_embedding(UMAPEmbedding, dataset, ax=ax[0,2])
+    test_embedding(TSNEEmbedding, dataset, ax=ax[1,0])
+    test_embedding(RandomProjectionEmbedding, dataset, ax=ax[1,2])
+
     plt.suptitle("Embedding Test for random dataset \n"
                  f"Dataset: {dataset.n_points} points, {dataset.d}-D, {dataset.n_clusters} clusters, "
                  f"separability {dataset.separability}", fontsize=14)
     plt.show()
-    # Add tests for other embedding classes as needed
-    # test_embedding(UMAPEmbedding, n_points=20000, d=42, n_clusters=10)
-    # test_embedding(TSNEEmbedding, n_points=20000, d=42, n_clusters=10)
-    # test_embedding(MDSEmbedding, n_points=20000, d=42, n_clusters=10)
-    # test_embedding(PCAEmbedding, n_points=20000, d=42, n_clusters=10)

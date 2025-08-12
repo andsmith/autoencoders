@@ -16,7 +16,7 @@ class AutoencoderExperiment(ABC):
     Base class for autoencoder experiments.
     """
 
-    def __init__(self, pca_dims, n_train_samples=0, bw_input=False, use_pca_cache=True):
+    def __init__(self, pca_dims, whiten_input=False, n_train_samples=0, bw_images=False, use_pca_cache=False, learning_rate=1e-3):
         """
         Initialize the AutoencoderExperiment.
         :param pca_dims:
@@ -25,10 +25,15 @@ class AutoencoderExperiment(ABC):
              < 1, fraction of variance
         :param n_train_samples: Number of training samples to use (0 for all 60k).
         """
+        self.whiten_input = whiten_input
+        self.learning_rate = learning_rate
         self._use_pca_cache = use_pca_cache
-        self.pca = PCA(dims=pca_dims)
+        self.pca = PCA(dims=pca_dims, whiten=whiten_input)
+
         self.n_train_samples = n_train_samples
-        self.pca_dims = self._load_data(binarize=bw_input)
+        self.pca_dims = self._load_data(binarize=bw_images)
+        self._d_in = self.pca.pca_dims  # after loading data
+        self._d_out = 784
         self._init_model()
 
     @abstractmethod
@@ -126,18 +131,39 @@ class AutoencoderExperiment(ABC):
         parser = ArgumentParser(description=description)
         parser.add_argument('--pca_dims', type=float, default=25,
                             help="PCA-preprocessing:[=0, whitening, no pca] / [int>0, number of PCA dims] / [0<float<1, frac of variance to keep]")
+        parser.add_argument('--whiten', action='store_true',
+                            help='If set, each PCA feature is z-scored, else will have its original distribution.')
+        parser.add_argument('--dropout_layer', type=int, default=None,
+                            help='Which encoding layer uses dropout (index into --layers param, cannot be final/coding layer)')
+        parser.add_argument('--dropout_rate', type=float, default=0.0,
+                            help='Dropout rate to apply after each dense layer (default: 0.0)')
         parser.add_argument('--layers', type=int, nargs='+', default=[64],
                             help='List of encoding layer sizes (default: [64])')
         parser.add_argument('--epochs', type=int, default=25,
                             help='Number of epochs to train each stage (default: 25)')
         parser.add_argument('--stages', type=int, default=5,
                             help='Number of training stages (default: 5)')
+        parser.add_argument('--learn_rate', type=float, default=1e-3,
+                            help='Learning rate for the optimizer (default: 1e-3)')
         parser.add_argument('--no_plot', action='store_true',
-                            help='If set, saves images instead of showing them interactively')
+                            help='If set, saves images instead of showing them interactively.')
+        parser.add_argument('--dec_layers', type=int, nargs='+', default=None,
+                            help='List of decoding layer sizes (default: None, encoding layers reversed)')
         for arg in (extra_args):
             parser.add_argument(arg['name'], **{k: v for k, v in arg.items() if k != 'name'})
 
         parsed = parser.parse_args()
+
+        # Checks:
+        if parsed.dropout_layer is not None:
+            if parsed.dropout_rate == 0.0:
+                parser.error("Dropout rate must be > 0.0 if dropout layer is specified.")
+            if parsed.dropout_layer >= len(parsed.layers) - 1:
+                parser.error("Dropout layer cannot be the final/coding layer")
+            parsed.dropout = {'layer': parsed.dropout_layer,
+                              'rate': parsed.dropout_rate}
+        else:
+            parsed.dropout = None
 
         if parsed.pca_dims == 0.0:
             parsed.pca_dims = 0

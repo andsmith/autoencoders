@@ -30,7 +30,7 @@ from img_util import make_img as mnist_img
 from tests import load_mnist
 from pca import PCA
 # Run on each of these:
-EMBEDDINGS = [PCAEmbedding, RandomProjectionEmbedding,TSNEEmbedding, UMAPEmbedding]
+EMBEDDINGS = [PCAEmbedding, RandomProjectionEmbedding, TSNEEmbedding, UMAPEmbedding]
 
 
 class LatentRepEmbedder(object):
@@ -96,7 +96,7 @@ class LatentRepEmbedder(object):
 
 class ImageEmbedder(LatentRepEmbedder):
     """
-    Don't encode with a network, just find embeddings on the high-dim space.
+    Don't encode with a network, just find embeddings on the high-dim space, PCA optional.
     """
     _METHODS = ['PCA', 'PCA-UW', 'random', None]
 
@@ -157,4 +157,7 @@ def embed():
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     # embed()
-    ImageEmbedder()
+    ImageEmbedder(method='PCA', n_dims=16, map_size_wh=(4096//2, 4096//2))
+
+
+#NOTE:  ADD NONWHITENING TO DENSE AND VAE!!!

@@ -15,7 +15,8 @@ properties of the original (latent) distribution.
 
 import numpy as np
 from shapely import points
-from sklearn.manifold import TSNE, MDS
+from sklearn.manifold import TSNE
+from sklearn.metrics.pairwise import cosine_distances
 from sklearn.decomposition import PCA
 import umap
 from abc import ABC, abstractmethod
@@ -271,3 +272,4 @@ class TSNEEmbedding(Embedding):
 
     def _embed_points(self, points):
         return self.tsne.transform(points)
+

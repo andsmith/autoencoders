@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from mnist import MNISTData
 import logging
 import tensorflow as tf
-from tensorflow.keras.layers import Dense, Input, Flatten, Reshape
+from tensorflow.keras.layers import Dense, Input, Dropout
 from tensorflow.keras.models import Model
 from img_util import diff_img, make_img, make_digit_mosaic
 import os
@@ -21,20 +21,31 @@ class DenseExperiment(AutoencoderExperiment):
     _DEFAULT_ACT_FNS = {'internal': 'relu',
                         'encoding': 'relu'}
 
-    def __init__(self, enc_layers=(64,), pca_dims=64, whiten_input=True, act_fns=None, **kwargs):
+    def __init__(self,
+                 enc_layers=(64,),
+                 pca_dims=64,
+                 whiten_input=True,
+                 dropout_info=None,
+                 act_fns=None,
+                 learning_rate=1e-3,
+                 dec_layers=None,
+                 **kwargs):
         """
         Initialize the Dense Experiment with a specified number of encoding units.
         :param enc_layers: list of layer sizes, final value is the encoding layer size.
         :param n_epochs: Number of epochs to train the autoencoder.
         :param act_fns: Dictionary of activation functions for internal, encoding, and output layers.
                         If None, uses default activation functions.
+        dec_layers: List of layer sizes for the decoder (if different from encoder).
+           NOTE:  in the feed forward order, (... -> encoder{n-1} -> encoder{n}/code -> decoder{0} -> ...)
         """
         self._history_dict = None
         if 'history_dict' in kwargs:
             self._history_dict = kwargs['history_dict']
             del kwargs['history_dict']
-
+        self.dropout = dropout_info
         self.enc_layer_desc = enc_layers
+        self.dec_layer_desc = dec_layers
         self.code_size = enc_layers[-1]
         self.act_fns = self._DEFAULT_ACT_FNS if act_fns is None else act_fns
         self._save_figs = None
@@ -45,19 +56,21 @@ class DenseExperiment(AutoencoderExperiment):
         if 'output' not in self.act_fns:
             # to resemble pixel values in [0, 1], probably don't change.
             self.act_fns['output'] = 'sigmoid'
-        self._d_in = pca_dims
         self._d_out = 784
 
-        super().__init__(pca_dims=pca_dims, whiten_input=whiten_input, **kwargs)
+        super().__init__(pca_dims=pca_dims, whiten_input=whiten_input, learning_rate=learning_rate, **kwargs)
+
         logging.info("Experiment initialized:  %s" % self.get_name())
         if isinstance(self.encoder, Model):
             self.print_model_architecture(self.encoder, self.decoder, self.autoencoder)
 
     def get_name(self, file_ext=None, suffix=None):
         desc_str = "-".join([str(n) for n in self.enc_layer_desc])
+        dec_desc_str = "_dec-units="+"-".join([str(n) for n in self.dec_layer_desc]) if self.dec_layer_desc is not None else ""
         pca_str = self.pca.get_short_name()
-        fname = ("Dense(%s_units=%s_encode=%s_internal=%s)" %
-                 (pca_str, desc_str, self.act_fns['encoding'], self.act_fns['internal']))
+        drop_str = "" if self.dropout is None else "_Drop(l=%i,r=%.2f)" % (self.dropout['layer'], self.dropout['rate'])
+        fname = ("Dense(%s_units=%s%s%s)" %
+                 (pca_str, desc_str, dec_desc_str, drop_str))
 
         if suffix is not None:
             fname = "%s_%s" % (fname, suffix)
@@ -87,12 +100,18 @@ class DenseExperiment(AutoencoderExperiment):
             act_fn = self.act_fns['internal'] if i < len(self.enc_layer_desc) - 1 else self.act_fns['encoding']
             layer = Dense(n_units, activation=act_fn, name=f'encoder_l{i}')(layer_input)
             encoder_layers.append(layer)
+            if self.dropout is not None and i == self.dropout['layer']:
+                logging.info("Adding dropout layer at %i with rate %.2f", i, self.dropout['rate'])
+                layer = Dropout(self.dropout['rate'], name=f'dropout_l{i}')(layer)
+
+            encoder_layers.append(layer)
 
         return encoder_layers
 
     def _init_decoder_layers(self, encoding):
         decoder_layers = []
-        decoder_layer_desc = list(reversed(self.enc_layer_desc[:-1]))  # skip the last encoding layer
+        decoder_layer_desc = self.dec_layer_desc[:] if self.dec_layer_desc is not None else self.enc_layer_desc[:-1][::-1]
+        print("---------------------------> " ,decoder_layer_desc, self.dec_layer_desc)
         decoder_layer_desc.append(self._d_out)  # add the input layer size for decoding
         for i, n_units in enumerate(decoder_layer_desc):
             if i == 0:
@@ -117,7 +136,8 @@ class DenseExperiment(AutoencoderExperiment):
         self.encoder = Model(inputs=inputs, outputs=encoding, name='encoder')
         self.autoencoder = Model(inputs=inputs, outputs=decoding, name='autoencoder')
         self.decoder = Model(inputs=encoding, outputs=decoding, name='decoder')
-        self.autoencoder.compile(optimizer='adam', loss='mean_squared_error')
+        self.optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
+        self.autoencoder.compile(optimizer=self.optimizer, loss='mean_squared_error')
         logging.info("Autoencoder model initialized and compiled")
 
     def is_trained(self):
@@ -184,17 +204,22 @@ class DenseExperiment(AutoencoderExperiment):
         """
         file = os.path.split(filename)[1]
         pattern = r'Dense\(PCA=(\d+)_units=(.*?)_encode=(.*?)_internal=(.*?)\)\.weights\.h5'
+        pattern_asym = r'Dense\(PCA=(\d+)_units=(.*?)_dec-units=(.*?)_encode=(.*?)_internal=(.*?)\)\.weights\.h5'
         match = re.match(pattern, file)
+        match_asym = re.match(pattern_asym, file)
+        match = match if match is not None else match_asym
         if match:
             pca_dim_param = int(match.group(1))
             enc_layers = tuple(map(int, match.group(2).split(',')))
             encoding_act_fn = match.group(3)
             internal_act_fn = match.group(4)
+            dec_layers = tuple(map(int, match.group(5).split(','))) if match_asym else None
             return {
                 'pca_dim': pca_dim_param,
                 'enc_layers': enc_layers,
                 'encoding_act_fn': encoding_act_fn,
                 'internal_act_fn': internal_act_fn,
+                'dec_layers': dec_layers
             }
         else:
             raise ValueError(f"Filename {filename} does not match expected format.")
@@ -203,11 +228,11 @@ class DenseExperiment(AutoencoderExperiment):
     def from_filename(filename):
         params = DenseExperiment.parse_filename(filename)
         network = DenseExperiment(pca_dims=params['pca_dim'],
-            enc_layers=params['enc_layers'],
-            act_fns={
-                'encoding': params['encoding_act_fn'],
-                'internal': params['internal_act_fn']
-            }
+                                  enc_layers=params['enc_layers'],
+                                  act_fns={
+            'encoding': params['encoding_act_fn'],
+            'internal': params['internal_act_fn']
+        }
         )
         network.load_weights(path=os.path.dirname(filename))
         return network
@@ -216,9 +241,10 @@ class DenseExperiment(AutoencoderExperiment):
         try:
             logging.info("Attempting to load pre-trained weights...")
             self.load_weights()
+            logging.info("Pre-trained weights loaded successfully, continuing training.")
             return True
         except FileNotFoundError:
-            logging.info("No pre-trained weights found, starting fresh training.")
+            logging.info("No pre-trained weights found, training from scratch.")
         return False
 
     def train_more(self, n_epochs=10, save_wts=True):
@@ -260,12 +286,17 @@ class DenseExperiment(AutoencoderExperiment):
         logging.info("\tMean squared error: %.4f (%.4f)", np.mean(self._mse_errors), np.std(self._mse_errors))
 
     def _plot_history(self):
-        fig, ax = plt.subplots(figsize=(10, 6))
+        fig, ax = plt.subplots(figsize=(10, 6),)
         ax.plot(self._history_dict['loss'])
         ax.plot(self._history_dict['val_loss'])
         ax.set_title('Training history: model loss')
         ax.set_ylabel('Loss')
         ax.set_xlabel('Epoch')
+        # set both axes logarithmic:
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+        # add grid
+        ax.grid(True, which='both', linestyle='--', linewidth=0.5)
         ax.legend(['Train', 'Test'], loc='upper right')
         filename = self.get_name(file_ext='image', suffix="_history")
 
@@ -383,8 +414,17 @@ class DenseExperiment(AutoencoderExperiment):
 def dense_demo():
     args = DenseExperiment.get_args("Train a dense autoencoder on MNIST data.")
     logging.info("Running Dense Autoencoder with args: %s", args)
-    de = DenseExperiment(enc_layers=args.layers, pca_dims=args.pca_dims)
-    de.run_staged_experiment(n_stages=args.stages, n_epochs=args.epochs, save_figs=args.no_plot)
+
+    de = DenseExperiment(enc_layers=args.layers,
+                         dec_layers=args.dec_layers,
+                         pca_dims=args.pca_dims,
+                         whiten_input=args.whiten,
+                         learning_rate=args.learn_rate,
+                         dropout_info=args.dropout)
+
+    de.run_staged_experiment(n_stages=args.stages,
+                             n_epochs=args.epochs,
+                             save_figs=args.no_plot)
 
 
 if __name__ == "__main__":

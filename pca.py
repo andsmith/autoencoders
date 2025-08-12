@@ -1,6 +1,5 @@
 from fileinput import filename
 import os
-import ipdb
 import numpy as np
 import matplotlib.pyplot as plt
 from util import make_test_data
@@ -16,23 +15,27 @@ class PCA(object):
         """
 
         :param pca_dims: Number of PCA dimensions for pre-processing:
-            0 == pca_dims     --> all data (no PCA)
+            None              --> all data (no PCA)
             0 < pca_dims < 1  --> (float) fraction of variance retained
             pca_dims > 1      --> (int) number of dimensions to keep
         """
-        self._dims = dims
+        self._dims_param = dims
         self.whiten = whiten
         self._n_train = None
-        self.pca_dims = None
+        self.pca_dims = None if dims > 0 else 784
         self.components = None
         self.scales = None
         self.means = None
-        logging.info("PCA(dims=%s, whiten=%s) initialized.", self._dims, self.whiten)
+        logging.info("%s initialized.", self.get_name())
 
     def get_name(self, n_train=None, n_dims=None):
         nt = self._n_train if n_train is None else n_train
+        nt = "(untrained)" if nt is None else "%i"%nt
         nd = n_dims if n_dims is not None else self.pca_dims
-        return "PCA(dim=%s_whiten=%s_n-train=%i)" % (nd, "T" if self.whiten else "F", nt)
+        return "PCA(dim=%s_whiten=%s_n-train=%s)" % (nd, "T" if self.whiten else "F", nt)
+
+    def get_short_name(self):
+        return "PCA(%s,%s)" % (self.pca_dims, ("W" if self.whiten else "UW"))
 
     def _cache_name(self, n_train, n_dims):
         file = self.get_name(n_train, n_dims) + ".pkl"
@@ -83,16 +86,16 @@ class PCA(object):
         self._n_train = points.shape[0]
 
         if use_cache:
-            if 0 < self._dims < 1:
+            if 0 < self._dims_param < 1:
                 raise ValueError("Can't use cache when deciding pca-dim by variance fraction.")
-            n_dims = self._dims if self._dims != 0 else 784
+            n_dims = self._dims_param if self._dims_param != 0 else 784
 
             if self._load_cache(n_dims):
                 return self.encode(points)
 
-        logging.info("PCA(dims=%s, whiten=%s) training ...", self._dims, self.whiten)
+        logging.info("PCA(dims=%s, whiten=%s) training ...", self._dims_param, self.whiten)
         self.means = np.mean(points, axis=0)
-        if self._dims == 0:
+        if self._dims_param == 0:
             self.pca_dims = 0  # no pca, just the data
             self.scales = np.std(points, axis=0)
             return self.encode(points)
@@ -101,15 +104,15 @@ class PCA(object):
         eigvals, eigvecs = np.linalg.eigh(cov)
         total_variance = np.sum(eigvals)
 
-        if self._dims >= 1:
-            self.pca_dims = self._dims
+        if self._dims_param >= 1:
+            self.pca_dims = self._dims_param
             current_variance = np.sum(eigvals[-self.pca_dims:])
 
-        if 0 < self._dims < 1:
+        if 0 < self._dims_param < 1:
             # Keep enough components to explain the desired variance
             current_variance = 0
             num_components = 0
-            while current_variance / total_variance < self._dims:
+            while current_variance / total_variance < self._dims_param:
                 current_variance += eigvals[-(num_components + 1)]
                 num_components += 1
             self.pca_dims = num_components
@@ -119,6 +122,8 @@ class PCA(object):
 
         # Project the data onto the selected eigenvectors
         encoded = self.encode(points)
+
+        print(np.var(encoded, axis=0))
 
         logging.info("\tPCA training complete....")
         logging.info("\t\tPCA dims: %i,", self.pca_dims)
