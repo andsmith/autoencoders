@@ -123,11 +123,13 @@ class PCA(object):
         # Project the data onto the selected eigenvectors
         encoded = self.encode(points)
 
-        print(np.var(encoded, axis=0))
+        self.variance_explained = current_variance / total_variance
+
+        #print(np.var(encoded, axis=0))
 
         logging.info("\tPCA training complete....")
         logging.info("\t\tPCA dims: %i,", self.pca_dims)
-        logging.info("\t\tCaptured %.3f of the variance,", 100 * current_variance / total_variance)
+        logging.info("\t\tCaptured %.3f of the variance,", 100 * self.variance_explained)
 
         if use_cache:
             self._write_cache(clobber=True)

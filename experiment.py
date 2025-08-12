@@ -34,6 +34,12 @@ class AutoencoderExperiment(ABC):
         self.pca_dims = self._load_data(binarize=bw_images)
         self._d_in = self.pca.pca_dims  # after loading data
         self._d_out = 784
+
+        self._history_dict = {
+            'loss': [],
+            'val_loss': [],
+            'learning_rate': []
+        }
         self._init_model()
 
     @abstractmethod
@@ -119,6 +125,15 @@ class AutoencoderExperiment(ABC):
         """
         pass
 
+
+
+    def _accumulate_history(self, more_history):
+        for key in more_history.keys():
+            if key not in self._history_dict:
+                self._history_dict[key] = []
+            self._history_dict[key].extend(more_history[key])
+
+
     @staticmethod
     def get_args(description=None, extra_args=()):
         """
@@ -141,8 +156,8 @@ class AutoencoderExperiment(ABC):
                             help='List of encoding layer sizes (default: [64])')
         parser.add_argument('--epochs', type=int, default=25,
                             help='Number of epochs to train each stage (default: 25)')
-        parser.add_argument('--stages', type=int, default=5,
-                            help='Number of training stages (default: 5)')
+        parser.add_argument('--stages', type=int, default=1,
+                            help='Number of times to train for the number of epochs, generate plots between each (default: 1)')
         parser.add_argument('--learn_rate', type=float, default=1e-3,
                             help='Learning rate for the optimizer (default: 1e-3)')
         parser.add_argument('--no_plot', action='store_true',

@@ -39,10 +39,6 @@ class DenseExperiment(AutoencoderExperiment):
         dec_layers: List of layer sizes for the decoder (if different from encoder).
            NOTE:  in the feed forward order, (... -> encoder{n-1} -> encoder{n}/code -> decoder{0} -> ...)
         """
-        self._history_dict = None
-        if 'history_dict' in kwargs:
-            self._history_dict = kwargs['history_dict']
-            del kwargs['history_dict']
         self.dropout = dropout_info
         self.enc_layer_desc = enc_layers
         self.dec_layer_desc = dec_layers
@@ -251,24 +247,13 @@ class DenseExperiment(AutoencoderExperiment):
         more_history = self.autoencoder.fit(self.x_train_pca, self.x_train,
                                             epochs=n_epochs, batch_size=512,
                                             validation_data=(self.x_test_pca, self.x_test))
-
-        if self._history_dict is None:
-            self._history_dict = more_history.history
-        else:
-            self._accumulate_history(more_history)
+        hist_update = more_history.history
+        hist_update['learning_rate'] = [self.learning_rate] * n_epochs
+        self._accumulate_history(hist_update)
 
         if save_wts:
             self.save_weights()
         return self._eval()
-
-    def _accumulate_history(self, more_history):
-        if self._history_dict is None:
-            self._history_dict = more_history.history
-        else:
-            for key in more_history.history.keys():
-                if key not in self._history_dict:
-                    self._history_dict[key] = []
-                self._history_dict[key].extend(more_history.history[key])
 
     def _eval(self):
 
@@ -286,18 +271,21 @@ class DenseExperiment(AutoencoderExperiment):
         logging.info("\tMean squared error: %.4f (%.4f)", np.mean(self._mse_errors), np.std(self._mse_errors))
 
     def _plot_history(self):
-        fig, ax = plt.subplots(figsize=(10, 6),)
-        ax.plot(self._history_dict['loss'])
-        ax.plot(self._history_dict['val_loss'])
-        ax.set_title('Training history: model loss')
-        ax.set_ylabel('Loss')
-        ax.set_xlabel('Epoch')
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+        ax1.plot(self._history_dict['loss'])
+        ax1.plot(self._history_dict['val_loss'])
+        ax1.set_title('Training history: model loss')
+        ax1.set_ylabel('Loss')
+        ax2.plot(self._history_dict['learning_rate'])
+        ax2.set_title('Training history: learning rate')
+        ax2.set_ylabel('Learning Rate')
+        ax2.set_xlabel('Epoch')
         # set both axes logarithmic:
-        ax.set_xscale('log')
-        ax.set_yscale('log')
+        ax1.set_xscale('log')
+        ax1.set_yscale('log')
         # add grid
-        ax.grid(True, which='both', linestyle='--', linewidth=0.5)
-        ax.legend(['Train', 'Test'], loc='upper right')
+        ax1.grid(True, which='both', linestyle='--', linewidth=0.5)
+        ax1.legend(['Train', 'Test'], loc='upper right')
         filename = self.get_name(file_ext='image', suffix="_history")
 
         self._maybe_save_fig(fig, filename)
