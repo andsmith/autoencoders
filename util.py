@@ -131,7 +131,79 @@ def test_make_data(d=3, plot=True):
         plt.tight_layout()
         plt.show()
 
+
+def fit_spaced_intervals(extent, n_intervals, spacing_fraction, min_spacing=1, fill_extent=True):
+    """
+    Fit intervals within a given extent, ensuring specified spacing between them, but not on either end,
+    so the first interval starts at extent[0] and the last ends at extent[1]
+    :param extent: The total extent (range) within which to fit intervals.
+    :param n_intervals: The number of intervals to fit.
+    :param spacing_fraction: The fraction of the interval size to use as spacing.
+    :param fill_extent: 
+        True: (default) intervals have integer sizes, but spacing can vary to fill the entire extent. 
+        False:  items will be evenly spaced, but may not fill the entire extent.
+    :return: A list of tuples representing the fitted intervals.
+    """
+    if n_intervals == 0:
+        return []
+    intervals = []
+    total_size = extent[1] - extent[0]
+    interval_size = int(total_size / (n_intervals + spacing_fraction * (n_intervals - 1)))
+    spacing = (total_size - interval_size * n_intervals) / (n_intervals - 1) if n_intervals > 1 else 0
+    if spacing < min_spacing:
+        spacing = min_spacing
+        interval_size = (total_size - spacing * (n_intervals - 1)) / n_intervals
+        #interval_starts = (np.arange(n_intervals) * (interval_size + spacing) + extent[0])
+    if not fill_extent:
+        spacing = int(spacing)
+        interval_size = int(interval_size)
+    interval_starts = (np.arange(n_intervals) * (interval_size + spacing) + extent[0]).astype(int)
+    interval_ends = interval_starts + int(interval_size)
+
+    return [(start, end) for start, end in zip(interval_starts, interval_ends)]
+
+
+def test_fit_spaced_intervals():
+    ext = [0, 50]
+    ext_range = ext[1]-ext[0]
+    n_intervals = [1, 2, 3, 5, 7, 10, 12, 15]
+
+    spacing_frac = [0.0, 0.1, 0.2, 0.5]
+    n_rows, n_cols = len(n_intervals), len(spacing_frac)
+    fix, ax = plt.subplots(n_rows, n_cols, figsize=(12, 8), sharex=True, sharey=True)
+    ax = np.array(ax).reshape(n_rows, n_cols)
+    for i, n_int in enumerate(n_intervals):
+        for j, s_frac in enumerate(spacing_frac):
+            print(f"Testing intervals: {n_int}, spacing: {s_frac}")
+            #mport ipdb; ipdb.set_trace()
+            intervals = fit_spaced_intervals(ext, n_int, s_frac)
+            intervals_even = fit_spaced_intervals(ext, n_int, s_frac, fill_extent=False)
+            interval_size = intervals[0][1] - intervals[0][0] if intervals else 0
+            def _plot_at_y(intv, y):
+                xcoords = np.array([(start, end, np.nan) for (start, end) in intv]).flatten()
+                ycoords = np.zeros_like(xcoords) + y
+                coords = np.stack([xcoords[:, ...], ycoords[:, ...]], axis=-1)
+                ax[i, j].plot(coords[:, 0], coords[:, 1], 'o-',markersize=2)
+                ax[i, j].axis('off')
+            _plot_at_y(intervals, -0.1)
+            _plot_at_y(intervals_even, 0.1)
+            ax[i, j].plot([ext[0], ext[0]], [-.3, .3], 'k-')
+            ax[i, j].plot([ext[1], ext[1]], [-.3, .3], 'k-')
+            ax[i, j].set_title(f"Intervals: {n_int}, size={interval_size}, spacing_frac={s_frac}\n"+
+                               f"blue: {intervals[0][0]} .. {intervals[-1][1]},  " +
+                               f"orange: {intervals_even[0][0]} .. {intervals_even[-1][1]}",
+                               fontsize=10)
+            ax[i, j].set_xlim(ext[0]-ext_range*.05, ext[1]+ext_range*.05)
+            ax[i, j].set_ylim(-.3, .3)
+
+    plt.suptitle('Extent: [%s, %s],  \nblue: fill-extent=True (uneven spacing, even endpoints),\n'
+                 'orange: fill-extent=False (even spacing, uneven endpoints)' % (ext[0], ext[1]))
+    plt.tight_layout()
+    plt.show()
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     # test_make_random_cov(n_points=10000, plot=True)
     # test_make_data(d=2, plot=True)
+    test_fit_spaced_intervals()
