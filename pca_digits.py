@@ -6,7 +6,6 @@ from img_util import make_img, make_digit_mosaic
 from colors import COLORS
 import logging
 import cv2
-from util import calc_center_of_mass,calc_digit_bbox
 
 def _generate(images, samples, grid_shape, d=None, var_frac=None, orient='vertical'):
     """
