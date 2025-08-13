@@ -2,13 +2,13 @@ from pca import PCA
 from tests import load_mnist
 import numpy as np
 import matplotlib.pyplot as plt
-from img_util import make_img
+from img_util import make_img, make_digit_mosaic
 from colors import COLORS
 import logging
 import cv2
+from util import calc_center_of_mass,calc_digit_bbox
 
-
-def _generate(images, labels, samples, grid_shape, d=None, var_frac=None, orient='vertical'):
+def _generate(images, samples, grid_shape, d=None, var_frac=None, orient='vertical'):
     """
     :param images: The input images.
     :param labels: The labels corresponding to the images.
@@ -18,12 +18,10 @@ def _generate(images, labels, samples, grid_shape, d=None, var_frac=None, orient
     :param var_frac: The fraction of variance to retain (if using PCA).
     :param orient: Are images ordered across rows first (horizontal) or columns first (vertical)?
     """
-    sample_labels = labels[samples]
-    sample_order = np.argsort(sample_labels)
     if d is not None:
-        pca = PCA(dims=d, whiten=False)
+        pca = PCA(dims=d, whiten=True)
     elif var_frac is not None:
-        pca = PCA(dims=var_frac, whiten=False)
+        pca = PCA(dims=var_frac, whiten=True)
     else:
         pca = None
 
@@ -35,14 +33,13 @@ def _generate(images, labels, samples, grid_shape, d=None, var_frac=None, orient
         decoded_images = pca.decode(encoded_images)
         train_mse = np.mean((images - decoded_images) ** 2)
         decoded_sample_images = [decoded_images[s].reshape(28, 28) for s in samples]
-        decoded_sample_images = [decoded_sample_images[i] for i in sample_order]
 
         var_exp, pca_dim = pca.variance_explained, pca.pca_dims
         title_parts = {"p_comps": "%i" % pca_dim, "var_pct": "%.2f %%" % (var_exp*100), "mse": "%.5f" % train_mse}
 
     out_img = np.zeros((grid_shape[0] * 28, grid_shape[1] * 28))
     for i, img in enumerate(decoded_sample_images):
-        if orient=='horizontal':
+        if orient == 'horizontal':
             col = i % grid_shape[1]
             row = i // grid_shape[1]
         else:
@@ -52,10 +49,6 @@ def _generate(images, labels, samples, grid_shape, d=None, var_frac=None, orient
 
     return out_img, title_parts
 
-
-def show_low_dim_results():
-    # Show "reconstructions" evenly interpolated across 1 and 2-d PCA representations.
-    pass
 
 
 def _draw_img_data(img_data_list, title):
@@ -122,7 +115,7 @@ def _plot_img_data(img_data_list, title):
     plt.tight_layout()
 
 
-def draw_pca_maps():
+def draw_pca_maps(images, labels):
     # Show originals where values==None.
 
     dim_grid = [None, 2, 4,
@@ -132,20 +125,21 @@ def draw_pca_maps():
     var_grid = [None, 0.1, 0.25,
                 0.33, 0.5, 0.75,
                 0.90, 0.95, 0.99]
-
-    _, (images, labels) = load_mnist()
+    
 
     sample_grid_shape = [15, 10]
     n_samples = np.prod(sample_grid_shape)
     sample = np.array([np.random.choice(np.where(labels == i)[0], n_samples // 10, replace=False)
                       for i in range(10)]).flatten()
-    
+
     orient = 'vertical' if sample_grid_shape[0] > sample_grid_shape[1] else 'horizontal'
 
-    img_data_by_dim = [_generate(images, labels, sample, sample_grid_shape, d=d, var_frac=None, orient=orient) for d in dim_grid]
-    img_data_by_var = [_generate(images, labels, sample, sample_grid_shape, d=None, var_frac=v, orient=orient) for v in var_grid]
+    img_data_by_dim = [_generate(images, sample, sample_grid_shape, d=d,
+                                 var_frac=None, orient=orient) for d in dim_grid]
+    img_data_by_var = [_generate(images, sample, sample_grid_shape, d=None,
+                                 var_frac=v, orient=orient) for v in var_grid]
 
-    #Show by # of PCA dimensions:
+    # Show by # of PCA dimensions:
     _plot_img_data(img_data_by_dim, "PCA Maps by Number of Components")
     # Show by fraction of explained variance:
     _plot_img_data(img_data_by_var, "PCA Maps by Fraction of Explained Variance")
@@ -158,6 +152,55 @@ def draw_pca_maps():
     cv2.imwrite("PCA-Digits_by-n_comps.png", img_by_dim)
     cv2.imwrite("PCA-Digits_by-var_exp.png", img_by_var)
 
+
+def show_low_dim_results():
+    # Show "reconstructions" evenly interpolated across 1 and 2-d PCA representations.
+    pass
+
+def _make_comp_img(components, grid_shape, magnification, max_z=3.75):
+    """
+    First arange all components in reverse order in the specified grid shape.
+    Then normalize/scale and magnify.
+    """
+    # Arrange components in the specified grid shape
+    float_img = np.zeros((grid_shape[0] * 28 , grid_shape[1] * 28 ), dtype=np.float32)
+    for i in range(components.shape[1]):
+        row = i // grid_shape[1]
+        col = i % grid_shape[1]
+        x_left = col * 28 
+        y_top = row * 28 
+        comp_img = components[:, i].reshape(28, 28)
+
+        float_img[y_top:y_top + 28, x_left:x_left + 28] = comp_img
+    z_image = (float_img-np.mean(float_img))/ np.std(float_img)
+    float_img = np.clip(z_image/max_z, -1, 1)/2 + 0.5
+    float_img = (float_img*255).astype(np.uint8)
+    new_size = (float_img.shape[1] * magnification, float_img.shape[0] * magnification)
+    return cv2.resize(float_img, new_size, interpolation=cv2.INTER_CUBIC)
+
+def show_components(images, labels):
+    # Show a representation of the components.
+    grid_shape = (10, 15)  # rows, cols of examples to show
+    mag_factor = 5
+    n_comps = grid_shape[0] * grid_shape[1]
+
+    pca = PCA(dims=n_comps)
+
+    pca.fit_transform(images)
+    comps = pca.components
+    image = _make_comp_img(comps, grid_shape, mag_factor)
+    cv2.imwrite("PCA-Digits_Components.png", image)
+    cv2.imshow( "PCA Components", image)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+def make_figs():
+    _, (images, labels) = load_mnist()
+
+    draw_pca_maps(images, labels)
+    show_components(images, labels)
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    draw_pca_maps()
+    make_figs()

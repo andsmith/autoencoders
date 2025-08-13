@@ -64,7 +64,6 @@ class PCA(object):
 
     def encode(self, points):
         codes = points - self.means
-
         if self.pca_dims == 0:
             codes = codes / self.scales if self.whiten else codes
         else:
@@ -84,6 +83,9 @@ class PCA(object):
 
     def fit_transform(self, points, use_cache=False):
         self._n_train = points.shape[0]
+        self._d_input = points.shape[1]
+        if self._d_input < self._dims_param:
+            raise ValueError("PCA dimensions (%i) cannot be greater than input dimensions (%i)." % (self._dims_param, self._d_input))
 
         if use_cache:
             if 0 < self._dims_param < 1:
@@ -100,32 +102,37 @@ class PCA(object):
             self.scales = np.std(points, axis=0)
             return self.encode(points)
 
-        cov = np.cov(points, rowvar=False)
-        eigvals, eigvecs = np.linalg.eigh(cov)
+        # using SVD:
+        U, s, Vh = np.linalg.svd((points - self.means), full_matrices=False)
+        principal_components = Vh
+        eigvals = (s**2) / (points.shape[0] - 1) # Using N-1 for sample variance
         total_variance = np.sum(eigvals)
+        var_sum = np.cumsum(eigvals)/total_variance
 
         if self._dims_param >= 1:
+
             self.pca_dims = self._dims_param
-            current_variance = np.sum(eigvals[-self.pca_dims:])
+            current_variance = var_sum[self.pca_dims]
 
-        if 0 < self._dims_param < 1:
+        elif 0 < self._dims_param < 1:
             # Keep enough components to explain the desired variance
-            current_variance = 0
-            num_components = 0
-            while current_variance / total_variance < self._dims_param:
-                current_variance += eigvals[-(num_components + 1)]
-                num_components += 1
-            self.pca_dims = num_components
 
-        self.components = eigvecs[:, -self.pca_dims:]
-        self.scales = eigvals[-self.pca_dims:] ** 0.5
+            ind = np.where(var_sum >= self._dims_param)[0]
+            if ind.size > 0:
+                current_variance = var_sum[ind[0]]
+                self.pca_dims = ind[0] + 1
+            else:
+                raise ValueError("PCA dimensions could not be determined, degenerate data?")
+            
+
+
+        self.components = principal_components[:self.pca_dims, :].T
+        self.scales = eigvals[:self.pca_dims]  ** 0.5
 
         # Project the data onto the selected eigenvectors
         encoded = self.encode(points)
 
-        self.variance_explained = current_variance / total_variance
-
-        #print(np.var(encoded, axis=0))
+        self.variance_explained = current_variance
 
         logging.info("\tPCA training complete....")
         logging.info("\t\tPCA dims: %i,", self.pca_dims)
@@ -137,9 +144,11 @@ class PCA(object):
         return encoded
 
 
-def _test_pca_modes(pca, data, labels, plot=True):
+def _test_pca_modes(pca, data, labels, plot):
     codes = pca.fit_transform(data)
     decodes = pca.decode(codes)
+    bbox={'x': np.array([np.min(codes[:, 0]), np.max(codes[:, 0])]), 
+          'y': np.array([np.min(codes[:, 1]), np.max(codes[:, 1])])}
 
     if plot:
         fig, ax = plt.subplots(1, 3, figsize=(9, 4))
@@ -148,46 +157,64 @@ def _test_pca_modes(pca, data, labels, plot=True):
         def _show_data(points, title, ax):
             ax.scatter(points[:, 0], points[:, 1], s=1, c=labels, alpha=0.5)
             ax.set_title(title)
-            ax.set_aspect('equal')
+            return bbox
 
         _show_data(data, "Original Data", ax[0])
         _show_data(codes, "Encoded Data", ax[1])
         _show_data(decodes, "Decoded Data", ax[2])
+
+
         plt.suptitle(pca.get_name())
         plt.tight_layout()
+    return bbox
 
-
-def test_pca_modes():
+def test_pca_modes(plot=False):
     # cov = np.array([[1, 0.1], [0.1, .02]])
     # data = np.random.multivariate_normal([0, 0], cov, size=5000)  + 2
     data, labels = make_test_data(10, 5000, n_clusters=5, separability=2.0)
-    data[:, 0] *= 2
-    data[:, 1] += 25
+    data[:, 0] *= 5
+    data[:, 1] += 30
 
-    _test_pca_modes(PCA(dims=0), data, labels)
-    _test_pca_modes(PCA(dims=0, whiten=False), data, labels)
-    _test_pca_modes(PCA(dims=15, whiten=True), data, labels)
-    _test_pca_modes(PCA(dims=15, whiten=False), data, labels)
-    _test_pca_modes(PCA(dims=.95, whiten=True), data, labels)
-    _test_pca_modes(PCA(dims=.95, whiten=False), data, labels)
+    def check(bbox, whiten):
+        """
+        should be standard normal,within +/- 6 if whitened,
+        else max(abs(x)) should be > 200 and max(abs(y)) > 20
+        """
+        if whiten:
+            assert np.max(np.abs(bbox['x'])) < 6, "Bounding box should have been within x,y~[-6,6], but got bbox:  %s" % bbox
+            assert np.max(np.abs(bbox['y'])) < 6, "Bounding box should have been within x,y~[-6,6], but got bbox:  %s" % bbox
+        else:
+            assert max(abs(bbox['x'])) > 60, "Bounding box should have been outside x,y~[-200,200], but got bbox:  %s" % bbox
+            assert max(abs(bbox['y'])) > 10, "Bounding box should have been outside x,y~[-20,20], but got bbox:  %s" % bbox
+
+    check(_test_pca_modes(PCA(dims=0), data, labels,plot=plot), whiten=True)
+    check(_test_pca_modes(PCA(dims=0, whiten=False), data, labels,plot=plot), whiten=False)
+    check(_test_pca_modes(PCA(dims=3, whiten=True), data, labels,plot=plot), whiten=True)
+    check(_test_pca_modes(PCA(dims=7, whiten=False), data, labels,plot=plot), whiten=False)
+    check(_test_pca_modes(PCA(dims=.95, whiten=True), data, labels,plot=plot), whiten=True)
+    check(_test_pca_modes(PCA(dims=.95, whiten=False), data, labels,plot=plot), whiten=False)
 
     plt.show()
 
 
-def test_pca_layer():
+def test_pca_layer(plot=False):
     d = 100
     data, labels = make_test_data(d, 5000, n_clusters=5, separability=1.0)
     pca = PCA(dims=5)
     reduced_data = pca.fit_transform(data)
-    fig, ax = plt.subplots(1, 2, figsize=(8, 5))
-    ax[0].scatter(reduced_data[:, 0], reduced_data[:, 1], c=labels, s=2)
-    ax[0].set_title("PCA-reduced data")
-    ax[1].scatter(data[:, 0], data[:, 1], c=labels)
-    ax[1].set_title("Original data (first 2 of %i dims)" % (d,))
-    plt.show()
+    if plot:
+        fig, ax = plt.subplots(1, 2, figsize=(8, 5))
+        ax[0].scatter(reduced_data[:, 0], reduced_data[:, 1], c=labels, s=2)
+        ax[0].set_title("PCA-reduced data")
+        ax[1].scatter(data[:, 0], data[:, 1], c=labels)
+        ax[1].set_title("Original data (first 2 of %i dims)" % (d,))
+        plt.suptitle(pca.get_name())
+        plt.tight_layout()
+        plt.show()
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     test_pca_layer()
     test_pca_modes()
+    logging.info("PCA tests completed successfully.")
