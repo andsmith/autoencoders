@@ -81,7 +81,8 @@ class PCA(object):
 
         return points + self.means
 
-    def fit_transform(self, points, use_cache=False):
+    def fit_transform(self, points):
+        use_cache=False
         self._n_train = points.shape[0]
         self._d_input = points.shape[1]
         if self._d_input < self._dims_param:

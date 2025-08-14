@@ -15,6 +15,7 @@ will create the following files:
 and put them in the "VAE-results/" subdirectory.
 
 """
+from latent_var_plots import LatentCodeSet
 from fileinput import filename
 import numpy as np
 import matplotlib.pyplot as plt
@@ -27,22 +28,24 @@ import argparse
 from embedding_drawing import draw_embedding
 from load_ae import load_autoencoder
 from img_util import make_img as mnist_img
-from tests import load_mnist
+from tests import load_mnist, load_fashion_mnist
+
 from pca import PCA
 # Run on each of these:
-EMBEDDINGS = [PCAEmbedding, RandomProjectionEmbedding, TSNEEmbedding, UMAPEmbedding]
+EMBEDDINGS = [ TSNEEmbedding, UMAPEmbedding]#PCAEmbedding, RandomProjectionEmbedding,
 
 
 class LatentRepEmbedder(object):
-    def __init__(self, weights_filename, map_size_wh=(4096, 4096)):
+    def __init__(self, embedders, weights_filename, map_size_wh=(4096, 4096)):
         """
         :param weights_filename: Path to the trained autoencoder weights file  (saved AutoencoderExperiment)
         :param map_size_wh: Size of the map to draw the embeddings on
         """
+        self._dataset = "Digits"
         self._map_size_wh = map_size_wh
         self._weights_filename = weights_filename
         self._autoencoder = self._load_autoencoder()
-        self._embedders = [EmbeddingClass() for EmbeddingClass in EMBEDDINGS]
+        self._embedders = embedders
         self._codes, self._digits, self._images = self._encode_data()
         self._embedded_train_data, self._embed_files = self._calc_embeddings()
         self._draw_maps()
@@ -80,7 +83,7 @@ class LatentRepEmbedder(object):
 
         images, bboxes = [], []
         for i, (image_locs, save_file) in enumerate(zip(self._embedded_train_data, self._embed_files)):
-            map_image_name = "%s.map.png" % save_file
+            map_image_name = "%s-%s.map.png" % (self._dataset, save_file)
             image_locs = image_locs[sample]
 
             blank_map = np.zeros((self._map_size_wh[1], self._map_size_wh[0], 3), dtype=np.uint8)
@@ -94,70 +97,136 @@ class LatentRepEmbedder(object):
         return images, bboxes
 
 
+class CodeSetDist(LatentCodeSet):
+    """
+    Show a narrow boxplot for each code unit.
+    Put on the same scale, etc.
+    """
+
+    def __init__(self, codes):
+        test_codes, test_labels, digit_subset, colors = self._init_data(codes)
+        super().__init__(test_codes, test_labels, digit_subset, colors)
+
+    def _init_data(self, codes):
+        codes_0 = codes
+        labels_0 = np.zeros(codes.shape[0], dtype=np.int32)
+        fake_labels_1_9 = np.array([[d]*5 for d in range(1, 10)]).flatten()
+        fake_codes_1_9 = np.random.randn(fake_labels_1_9.shape[0], codes.shape[1])
+
+        test_codes = np.concatenate((codes_0, fake_codes_1_9), axis=0)
+        test_labels = np.concatenate((labels_0, fake_labels_1_9), axis=0)
+        digit_subset = (0,)  # don't use the fake codes/labels
+        colors = MPL_CYCLE_COLORS[:1]
+        return test_codes, test_labels, digit_subset, colors
+
+
 class ImageEmbedder(LatentRepEmbedder):
     """
-    Don't encode with a network, just find embeddings on the high-dim space, PCA optional.
+    For each embedding method, preprocess the data, plot input statistics (box-plot of values for each dimension),
+    create the embedding, and draw the map.
     """
-    _METHODS = ['PCA', 'PCA-UW', 'random', None]
+    # Do not run PCAEmbedding on whitened data, since all components have equal variance.
+    _PREPROC_METHODS = ['PCA', 'PCA-UW', 'random', None]
 
-    def __init__(self, method='PCA', n_dims=42, map_size_wh=(4096, 4096)):
-        self._method = method
+    def __init__(self, embedders, data, preproc_method, n_dims=None, map_size_wh=(4096, 4096), dataset='Digits'):
+        self._preproc = preproc_method
+        self._dataset = dataset
         self._n_dims = n_dims
         self._map_size_wh = map_size_wh
-        self._embedders = [EmbeddingClass() for EmbeddingClass in EMBEDDINGS]
-        print("Embedders:")
+        self._embedders = embedders
+        print("\nEmbedders:")
         for embedder in self._embedders:
-            print("\t",self._get_name(embedder))
+            print("\t", self._get_name(embedder))
 
-        self._load_data()
+        self._load_data(data)
         self._preprocess()
         self._embedded_train_data, _ = self._calc_embeddings(save=False)
+
         # Map filenames based on these:
         self._embed_files = [self._get_name(embedder) for embedder in self._embedders]
+        #self._draw_stats()
         self._draw_maps()
 
+    def _draw_stats(self):
+        code_dist = CodeSetDist(self._embedded_train_data)
+        img = code_dist.plot()
+
     def _get_name(self, embedder):
-        pre = ("%s(d=%i)" % (self._method, self._n_dims)) if self._method is not None else "raw(d=768)"
-        return "raw_digits_Embedding=%s_PreProc=%s" % (embedder.get_name(), pre)
-    
-    def _load_data(self):
-        (self.x_train, self.y_train), (self.x_test, self.y_test) = load_mnist()
-        self._images =  self.x_train
+        pre = ("%s(d=%i)" % (self._preproc, self._n_dims)) if self._preproc is not None else "raw(d=768)"
+        return "raw_%s_embedding=%s_PreProc=%s" % (self._dataset.lower(),embedder.get_name(), pre)
+
+    def _load_data(self, data):
+        (self.x_train, self.y_train), (self.x_test, self.y_test) = data
+        self._images = self.x_train
         self._digits = self.y_train
 
-
     def _preprocess(self):
-        if self._method is None:
+        if self._preproc is None:
             self._codes = self.x_train
             self._codes_test = self.x_test
-        elif self._method.startswith('PCA'):
-            whiten = not self._method.endswith('-UW')
+        elif self._preproc.startswith('PCA'):
+            whiten = not self._preproc.endswith('-UW')
             pca = PCA(dims=self._n_dims, whiten=whiten)
             self._codes = pca.fit_transform(self.x_train)
             self._codes_test = pca.encode(self.x_test)
-        elif self._method == 'random':
+        elif self._preproc == 'random':
             vecs = np.random.randn(self.x_train.shape[1], self._n_dims)
             vecs /= np.linalg.norm(vecs, axis=0)
             self._codes = self.x_train @ vecs
             self._codes_test = self.x_test @ vecs
         else:
-            raise ValueError("Invalid method: must be one of %s, got %s" % (self._METHODS, self._method))
+            raise ValueError("Invalid method: must be one of %s, got %s" % (self._PREPROC_METHODS, self._preproc))
 
 
-def embed():
-
+def embed_latent():
+    """
+    Find 2d embeddings of the latent representation of the dataset.
+    Go through all embedding classes in EMBEDDINGS, draw a big map.
+    """
     # TODO:  Add per-embedding args  --TSNE-perplexity --UMAP-n_neighbors
     description = "Load a trained autoencoder and create embeddings for the MNIST dataset."
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("weights_file", help="Path to the trained network weights file")
     args = parser.parse_args()
-    LatentRepEmbedder(args.weights_file)
+    embedders = [embed_class() for embed_class in EMBEDDINGS]
+    LatentRepEmbedder(embedders=embedders, weights_filename=args.weights_file)
+
+
+def embed_raw(dataset):
+    """
+    Find 2d embeddings of the raw data (with minimal pre-processing).
+    Go through all embedding classes in EMBEDDINGS, draw a big map.
+    """
+
+    embedders = [embed_class() for embed_class in EMBEDDINGS]
+
+    data = load_mnist() if dataset == 'Digits' else load_fashion_mnist()
+    for x in data:
+        print("Train", x[0].shape, "Test", x[1].shape)
+
+    # import ipdb; ipdb.set_trace()
+    ImageEmbedder(embedders=embedders, data=data, preproc_method=None, dataset=dataset)
+
+    # ImageEmbedder(embedders=embedders, data=data, preproc_method='PCA', n_dims=2, dataset=dataset)
+    # ImageEmbedder(embedders=embedders, data=data, preproc_method='PCA-UW', n_dims=2, dataset=dataset)
+    # ImageEmbedder(embedders=embedders, data=data, preproc_method='random', n_dims=2, dataset=dataset)
+
+    # ImageEmbedder(embedders=embedders, data=data, preproc_method='PCA', n_dims=10, dataset=dataset)
+    # ImageEmbedder(embedders=embedders, data=data, preproc_method='PCA-UW', n_dims=10, dataset=dataset)
+    # ImageEmbedder(embedders=embedders, data=data, preproc_method='random', n_dims=10, dataset=dataset)
+
+    # ImageEmbedder(embedders=embedders, data=data, preproc_method='PCA', n_dims=32, dataset=dataset)
+    # ImageEmbedder(embedders=embedders, data=data, preproc_method='PCA-UW', n_dims=32, dataset=dataset)
+    # ImageEmbedder(embedders=embedders, data=data, preproc_method='random', n_dims=32, dataset=dataset)
+
+    ImageEmbedder(embedders=embedders, data=data, preproc_method='PCA', n_dims=64, dataset=dataset)
+    ImageEmbedder(embedders=embedders, data=data, preproc_method='PCA-UW', n_dims=64, dataset=dataset)
+    ImageEmbedder(embedders=embedders, data=data, preproc_method='random', n_dims=64, dataset=dataset)
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    # embed()
-    ImageEmbedder(method='PCA', n_dims=16, map_size_wh=(4096//2, 4096//2))
 
+    # embed_latent()
+    embed_raw('Fashion')
 
-#NOTE:  ADD NONWHITENING TO DENSE AND VAE!!!

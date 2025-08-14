@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from argparse import ArgumentParser
 from pca import PCA
 
-from mnist import MNISTData
+from mnist import MNISTData, FashionMNISTData
 import logging
 
 
@@ -16,7 +16,7 @@ class AutoencoderExperiment(ABC):
     Base class for autoencoder experiments.
     """
 
-    def __init__(self, pca_dims, whiten_input=False, n_train_samples=0, bw_images=False, use_pca_cache=False, learning_rate=1e-3):
+    def __init__(self,dataset, pca_dims, whiten_input=False, n_train_samples=0, bw_images=False, use_pca_cache=False, learning_rate=1e-3):
         """
         Initialize the AutoencoderExperiment.
         :param pca_dims:
@@ -25,6 +25,9 @@ class AutoencoderExperiment(ABC):
              < 1, fraction of variance
         :param n_train_samples: Number of training samples to use (0 for all 60k).
         """
+        if dataset not in ['digits', 'fashion']:
+            raise ValueError("Dataset must be 'digits' or 'fashion'")
+        self.dataset = dataset
         self.whiten_input = whiten_input
         self.learning_rate = learning_rate
         self._use_pca_cache = use_pca_cache
@@ -43,11 +46,10 @@ class AutoencoderExperiment(ABC):
         self._init_model()
 
     @abstractmethod
-    def _init_model(self):
+    def get_name(self):
         """
-        Initialize the model with the given encoder and decoder.
-        :param encoder: Encoder model
-        :param decoder: Decoder model
+        Get the name of the experiment.
+        :return: string
         """
         pass
 
@@ -144,6 +146,8 @@ class AutoencoderExperiment(ABC):
         """
         description = "Run an autoencoder." if description is None else description
         parser = ArgumentParser(description=description)
+        parser.add_argument('--dataset', type=str, default='digits',
+                            help="'digits' (default), or 'fashion'")
         parser.add_argument('--pca_dims', type=float, default=25,
                             help="PCA-preprocessing:[=0, whitening, no pca] / [int>0, number of PCA dims] / [0<float<1, frac of variance to keep]")
         parser.add_argument('--whiten', action='store_true',
@@ -191,7 +195,7 @@ class AutoencoderExperiment(ABC):
         """
         return dimensionality of training data
         """
-        self.mnist_data = MNISTData()
+        self.mnist_data = MNISTData() if self.dataset == 'digits' else FashionMNISTData()
         self.x_train = self.mnist_data.x_train.reshape(-1, 28*28)
         self.x_test = self.mnist_data.x_test.reshape(-1, 28*28)
         self.y_train = np.where(self.mnist_data.y_train)[1]
@@ -207,7 +211,7 @@ class AutoencoderExperiment(ABC):
             self.x_test = (self.x_test > 0.5).astype(np.float32)
 
         # Finally, train PCA layer
-        self.x_train_pca = self.pca.fit_transform(self.x_train, use_cache=self._use_pca_cache)
+        self.x_train_pca = self.pca.fit_transform(self.x_train)
         self.x_test_pca = self.pca.encode(self.x_test)
 
         logging.info("Data loaded: %i training samples, %i test samples", self.x_train.shape[0], self.x_test.shape[0])

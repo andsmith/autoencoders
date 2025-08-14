@@ -125,7 +125,7 @@ class VAE(nn.Module):
 
 
 class VAEExperiment(AutoencoderExperiment):
-    def __init__(self, pca_dims, enc_layers, d_latent, dec_layers=None, reg_lambda=0.001, batch_size=256,learn_rate=1e-3, dropout_info=None, **kwargs):
+    def __init__(self, dataset,pca_dims, enc_layers, d_latent, dec_layers=None, reg_lambda=0.001, batch_size=256,learn_rate=1e-3, dropout_info=None, **kwargs):
         self.device = torch.device(kwargs.get("device", "cpu"))
         self.enc_layer_desc = enc_layers
 
@@ -146,7 +146,7 @@ class VAEExperiment(AutoencoderExperiment):
 
         self._d_in = pca_dims
         self._d_out = 28*28
-        super().__init__(pca_dims=pca_dims, **kwargs)
+        super().__init__(pca_dims=pca_dims,dataset=dataset, **kwargs)
         self._history_dict = {
             'loss': [],
             'mse': [],
@@ -154,7 +154,8 @@ class VAEExperiment(AutoencoderExperiment):
             'val-loss': [],
             'val-kld': [],
             'val-mse': [],
-            'lambda': []
+            'lambda': [],
+            'learn_rate': []
         }
         logging.info("Initialized VAEExperiment:  %s" % (self.get_name(),))
 
@@ -164,7 +165,7 @@ class VAEExperiment(AutoencoderExperiment):
         decoder_str = "_Decoder-%s" % "-".join(map(str, self.dec_layer_desc)) if self.dec_layer_desc is not None else ""
         encoder_str = "_Encoder-%s" % "-".join(map(str, self.enc_layer_desc))
 
-        root = ("VAE-TORCH(%s%s%s%s_Dlatent=%i_RegLambda=%.3f)" %  (pca_str, encoder_str, drop_str, decoder_str, self.code_size, self.reg_lambda))
+        root = ("%s_VAE-TORCH(%s%s%s%s_Dlatent=%i_RegLambda=%.3f)" %  (self.dataset,pca_str, encoder_str, drop_str, decoder_str, self.code_size, self.reg_lambda))
         if suffix is not None:
             root = "%s_%s" % (root, suffix)
 
@@ -178,9 +179,10 @@ class VAEExperiment(AutoencoderExperiment):
         return root
 
     @staticmethod
-    def from_filename(filename):
+    def from_filename(filename, dataset):
         filename = os.path.basename(filename)
-        match = re.match(r"VAE-TORCH\(pca=(\d+)_hidden=([\d\-]+)_d-latent=(\d+)_reg-lambda=(\d+\.\d+)\)", filename)
+        dataset = re.escape(dataset)
+        match = re.match(fr"{dataset}_VAE-TORCH\(pca=(\d+)_hidden=([\d\-]+)_d-latent=(\d+)_reg-lambda=(\d+\.\d+)\)", filename)
         if not match:
             raise ValueError(f"Filename {filename} is not in the expected format.")
 
@@ -268,6 +270,7 @@ class VAEExperiment(AutoencoderExperiment):
             self._history_dict['val-mse'].append(np.mean(test_loss_terms['mse']))
             self._history_dict['val-kld'].append(np.mean(test_loss_terms['kld']))
             self._history_dict['lambda'].append(self.model.lambda_reg)
+            self._history_dict['learn_rate'].append(self.learn_rate)
             print(f"Epoch {epoch+1}/{epochs} ({duration:.4f}s), " +
                   f"Training Loss: {avg_train_loss:.4f}," +
                   f"(MSE: {self._history_dict['mse'][-1]:.4f}, " +
@@ -310,7 +313,7 @@ class VAEExperiment(AutoencoderExperiment):
         logging.info("Loaded model weights from %s", filename)
         hist_filename = self.get_name(file_kind='history')
         with open(hist_filename, 'r') as f:
-            self._history_dict = json.load(f)
+            self._history_dict.update(json.load(f))
         logging.info("Loaded model history from %s", hist_filename)
 
     def _plot_code_samples(self, n_samp=39):
@@ -407,8 +410,8 @@ class VAEExperiment(AutoencoderExperiment):
             plt.show()
 
     def _plot_history(self):
-        height_ratios = [3, 3, 3, 1]
-        fig, ax = plt.subplots(nrows=4, ncols=1, figsize=(8, 10),sharex=True,
+        height_ratios = [3, 3, 3, 1, 1]
+        fig, ax = plt.subplots(nrows=5, ncols=1, figsize=(8, 10),sharex=True,
                                gridspec_kw={'height_ratios': height_ratios})
         ax[0].plot(self._history_dict['loss'], label='Train Loss')
         ax[0].plot(self._history_dict['val-loss'], label='Validation Loss')
@@ -432,7 +435,12 @@ class VAEExperiment(AutoencoderExperiment):
         ax[3].set_title('lambda history', fontsize=12)
         ax[3].set_xlabel('Epoch', fontsize=10)
         ax[3].set_ylabel('lambda', fontsize=10)
-        # grid
+        
+        # learning rate:
+        ax[4].plot(self._history_dict['learn_rate'], label='Learning Rate')
+        ax[4].set_title('Learning Rate history', fontsize=12)
+        ax[4].set_xlabel('Epoch', fontsize=10)
+        ax[4].set_ylabel('Learning Rate', fontsize=10)
 
         # turn off x-axis for all but bottom plots:
         for i in range(len(ax)-1):
@@ -614,6 +622,7 @@ def vae_demo():
         reg_lambda=args.reg_lambda,
         pca_dims=args.pca_dims,
         learn_rate=args.learn_rate,
+        dataset=args.dataset,
         dropout_info=args.dropout,
     )
     ve.run_staged_experiment(n_stages=args.stages, n_epochs=args.epochs, save_figs=args.no_plot)

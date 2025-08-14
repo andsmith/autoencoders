@@ -11,7 +11,7 @@ from pca_digits import draw_pca_maps, show_components
 def make_figs():
     _, (images, labels) = load_fashion_mnist()
 
-    draw_pca_maps(images, labels,dataset='Fashion')
+    #draw_pca_maps(images, labels,dataset='Fashion')
     show_components(images, labels,dataset='Fashion')
 
 
