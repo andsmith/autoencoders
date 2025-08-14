@@ -1,5 +1,6 @@
 import pickle
 import cv2
+from flask import json
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -14,6 +15,7 @@ from colors import COLORS
 from img_util import make_digit_mosaic, make_img, diff_img
 from latent_var_plots import LatentDigitDist
 import time
+import json
 from experiment import AutoencoderExperiment
 WORKING_DIR = "VAE-results"
 
@@ -123,13 +125,15 @@ class VAE(nn.Module):
 
 
 class VAEExperiment(AutoencoderExperiment):
-    def __init__(self, pca_dims, enc_layers, d_latent, dec_layers=None, reg_lambda=0.001, batch_size=256, dropout_info=None, **kwargs):
+    def __init__(self, pca_dims, enc_layers, d_latent, dec_layers=None, reg_lambda=0.001, batch_size=256,learn_rate=1e-3, dropout_info=None, **kwargs):
         self.device = torch.device(kwargs.get("device", "cpu"))
         self.enc_layer_desc = enc_layers
+
         self.dec_layer_desc = dec_layers
         self.dropout_info = dropout_info
         self.batch_size = batch_size
         self.code_size = d_latent
+        self.learn_rate = learn_rate
         self._stage = 0
         self._epoch = 0
         self.reg_lambda = reg_lambda
@@ -198,7 +202,7 @@ class VAEExperiment(AutoencoderExperiment):
                          dropout_info=self.dropout_info,
                          lambda_reg=self.reg_lambda).to(self.device)
 
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learn_rate)
         self.print_model_architecture(self.model.encoder, self.model.decoder, self.model)
 
     def print_model_architecture(self, encoder, decoder, model):
@@ -235,7 +239,7 @@ class VAEExperiment(AutoencoderExperiment):
                 x_batch = x_batch.to(self.device)
                 y_batch = y_batch.to(self.device)
                 self.optimizer.zero_grad()
-                recon_y, mu, log_var = self.model(x_batch)
+                recon_y, mu, log_var = self.model(x_batch) 
                 loss, MSE, KLD = self.model.loss_function(recon_y, y_batch, mu, log_var, return_terms=True)
                 train_loss_terms['kld'].append(KLD.item())
                 train_loss_terms['mse'].append(MSE.item())
@@ -289,15 +293,25 @@ class VAEExperiment(AutoencoderExperiment):
     def decode_samples(self, z):
         return self.model.decode(x=z)
 
-    def save_weights(self):
-        filename = self.get_name(file_kind='weights')
+    def save_weights(self, filename=None):
+
+        filename = self.get_name(file_kind='weights') if filename is None else filename
         torch.save(self.model.state_dict(), filename)
         logging.info("Saved model weights to %s", filename)
+        hist_filename = self.get_name(file_kind='history')
+        with open(hist_filename, 'w') as f:
+            json.dump(self._history_dict, f)
+        logging.info("Saved model history to %s", hist_filename)
+        
+    def load_weights(self, filename=None):
 
-    def load_weights(self):
-        filename = self.get_name(file_kind='weights')
+        filename =  self.get_name(file_kind='weights') if filename is None else filename
         self.model.load_state_dict(torch.load(filename, map_location=self.device, weights_only=True))
         logging.info("Loaded model weights from %s", filename)
+        hist_filename = self.get_name(file_kind='history')
+        with open(hist_filename, 'r') as f:
+            self._history_dict = json.load(f)
+        logging.info("Loaded model history from %s", hist_filename)
 
     def _plot_code_samples(self, n_samp=39):
         """
@@ -425,10 +439,10 @@ class VAEExperiment(AutoencoderExperiment):
             ax[i].set_xticklabels([])
             ax[i].grid(True)
             
-            ax[i].set_xscale('log')
+            ax[i].set_yscale('log')
 
         ax[3].grid(True)
-        ax[3].set_xscale('log')
+        ax[3].set_yscale('log')
 
 
         plt.tight_layout()
@@ -595,9 +609,11 @@ def vae_demo():
     ve = VAEExperiment(
         batch_size=args.batch_size,
         enc_layers=args.layers,
+        dec_layers=args.dec_layers,
         d_latent=args.d_latent,
         reg_lambda=args.reg_lambda,
         pca_dims=args.pca_dims,
+        learn_rate=args.learn_rate,
         dropout_info=args.dropout,
     )
     ve.run_staged_experiment(n_stages=args.stages, n_epochs=args.epochs, save_figs=args.no_plot)

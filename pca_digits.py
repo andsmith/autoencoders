@@ -114,7 +114,7 @@ def _plot_img_data(img_data_list, title):
     plt.tight_layout()
 
 
-def draw_pca_maps(images, labels):
+def draw_pca_maps(images, labels, dataset='Digits'):
     # Show originals where values==None.
 
     dim_grid = [None, 2, 4,
@@ -148,8 +148,8 @@ def draw_pca_maps(images, labels):
     img_by_var = _draw_img_data(img_data_by_var, "PCA Maps by Fraction of Explained Variance")
     img_by_dim = _draw_img_data(img_data_by_dim, "PCA Maps by Number of Components")
 
-    cv2.imwrite("PCA-Digits_by-n_comps.png", img_by_dim)
-    cv2.imwrite("PCA-Digits_by-var_exp.png", img_by_var)
+    cv2.imwrite("PCA-%s_by-n_comps.png" % (dataset, img_by_dim))
+    cv2.imwrite("PCA-%s_by-var_exp.png" % (dataset, img_by_var))
 
 
 def show_low_dim_results():
@@ -177,7 +177,7 @@ def _make_comp_img(components, grid_shape, magnification, max_z=3.75):
     new_size = (float_img.shape[1] * magnification, float_img.shape[0] * magnification)
     return cv2.resize(float_img, new_size, interpolation=cv2.INTER_CUBIC)
 
-def show_components(images, labels):
+def show_components(images, labels, dataset='Digits'):
     # Show a representation of the components.
     grid_shape = (10, 15)  # rows, cols of examples to show
     mag_factor = 5
@@ -188,7 +188,7 @@ def show_components(images, labels):
     pca.fit_transform(images)
     comps = pca.components
     image = _make_comp_img(comps, grid_shape, mag_factor)
-    cv2.imwrite("PCA-Digits_Components.png", image)
+    cv2.imwrite("PCA-%s_Components.png" % dataset, image)
     cv2.imshow( "PCA Components", image)
     cv2.waitKey(0)
     cv2.destroyAllWindows()

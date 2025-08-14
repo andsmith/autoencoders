@@ -4,11 +4,18 @@ from img_util import make_digit_mosaic
 import numpy as np
 import matplotlib.pyplot as plt
 import logging
+from keras.datasets import fashion_mnist, mnist
 
 
 def load_mnist():
-    from keras.datasets import mnist
     (x_train, y_train), (x_test, y_test) = mnist.load_data()
+    x_train = x_train.reshape((x_train.shape[0], -1)) / 255.0
+    x_test = x_test.reshape((x_test.shape[0], -1)) / 255.0
+    return (x_train, y_train), (x_test, y_test)
+
+
+def load_fashion_mnist():
+    (x_train, y_train), (x_test, y_test) = fashion_mnist.load_data()
     x_train = x_train.reshape((x_train.shape[0], -1)) / 255.0
     x_test = x_test.reshape((x_test.shape[0], -1)) / 255.0
     return (x_train, y_train), (x_test, y_test)
@@ -74,7 +81,13 @@ def test_dense_from_filename():
     plt.show()
 
 
+def test_fashion_mnist():
+    data = load_fashion_mnist()
+    logging.info("Loaded Fashion MNIST dataset")
+    logging.info("Training data shape: %s", data[0][0].shape)
+    logging.info("Test data shape: %s", data[1][0].shape)
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     #test_dense_from_filename()
-    test_vae_from_filename()
+    test_fashion_mnist()
