@@ -174,8 +174,8 @@ def test_fit_spaced_intervals():
     ax = np.array(ax).reshape(n_rows, n_cols)
     for i, n_int in enumerate(n_intervals):
         for j, s_frac in enumerate(spacing_frac):
-            print(f"Testing intervals: {n_int}, spacing: {s_frac}")
-            #mport ipdb; ipdb.set_trace()
+            logging.info(f"Testing intervals: {n_int}, spacing: {s_frac}")
+
             intervals = fit_spaced_intervals(ext, n_int, s_frac)
             intervals_even = fit_spaced_intervals(ext, n_int, s_frac, fill_extent=False)
             interval_size = intervals[0][1] - intervals[0][0] if intervals else 0
@@ -207,3 +207,4 @@ if __name__ == "__main__":
     # test_make_random_cov(n_points=10000, plot=True)
     # test_make_data(d=2, plot=True)
     test_fit_spaced_intervals()
+    logging.info("Tests completed successfully.")

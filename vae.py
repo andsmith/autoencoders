@@ -17,30 +17,39 @@ import time
 from experiment import AutoencoderExperiment
 WORKING_DIR = "VAE-results"
 
-
 class Encoder(nn.Module):
-    def __init__(self, input_dim, hidden_dims, latent_dim):
+    def __init__(self, input_dim, hidden_dims, latent_dim, dropout_layer=None, dropout_rate=0.5):
         super().__init__()
+        self.hidden_dims = hidden_dims
         self.hidden_layers = nn.ModuleList()
+        self.dropouts = nn.ModuleDict()  # store optional dropout layers
         last_dim = input_dim
-        for layer_size in hidden_dims:
+
+        for i, layer_size in enumerate(hidden_dims):
             self.hidden_layers.append(nn.Linear(last_dim, layer_size))
+            if dropout_layer is not None and i == dropout_layer:
+                self.dropouts[str(i)] = nn.Dropout(p=dropout_rate)
             last_dim = layer_size
+
         self.fc_mu = nn.Linear(hidden_dims[-1], latent_dim)
         self.fc_logvar = nn.Linear(hidden_dims[-1], latent_dim)
         self.relu = nn.ReLU()
 
     def forward(self, x):
-        for layer in self.hidden_layers:
+        for i, layer in enumerate(self.hidden_layers):
             x = self.relu(layer(x))
+            if str(i) in self.dropouts:
+                x = self.dropouts[str(i)](x)
         mu = self.fc_mu(x)
         log_var = self.fc_logvar(x)
         return mu, log_var
 
 
+
 class Decoder(nn.Module):
     def __init__(self, latent_dim, hidden_dims, output_dim):
         super().__init__()
+        self.hidden_dims = hidden_dims
         self.hidden_layers = nn.ModuleList()
         last_dim = latent_dim
         for layer_size in hidden_dims:
@@ -58,12 +67,12 @@ class Decoder(nn.Module):
 
 
 class VAE(nn.Module):
-    def __init__(self, input_dim, hidden_dims, latent_dim, output_dim, device, lambda_reg=0.001):
+    def __init__(self, input_dim, enc_hidden_dims, dec_hidden_dims, latent_dim, output_dim, device, dropout_info=None, lambda_reg=0.001):
         super().__init__()
-        self.encoder = Encoder(input_dim, hidden_dims, latent_dim)
-        self.decoder = Decoder(latent_dim, hidden_dims[::-1], output_dim)
+        d_l, d_r = (dropout_info['layer'], dropout_info['rate']) if dropout_info is not None else (None, None)
+        self.encoder = Encoder(input_dim, enc_hidden_dims, latent_dim,dropout_layer=d_l, dropout_rate=d_r)
+        self.decoder = Decoder(latent_dim, dec_hidden_dims, output_dim)
         self.latent_dim = latent_dim
-        self.hidden_dims = hidden_dims
         self.input_dim = input_dim
         self.lambda_reg = lambda_reg
         self.device = device
@@ -114,9 +123,11 @@ class VAE(nn.Module):
 
 
 class VAEExperiment(AutoencoderExperiment):
-    def __init__(self, pca_dims, enc_layers, d_latent, reg_lambda=0.001, batch_size=256, **kwargs):
+    def __init__(self, pca_dims, enc_layers, d_latent, dec_layers=None, reg_lambda=0.001, batch_size=256, dropout_info=None, **kwargs):
         self.device = torch.device(kwargs.get("device", "cpu"))
         self.enc_layer_desc = enc_layers
+        self.dec_layer_desc = dec_layers
+        self.dropout_info = dropout_info
         self.batch_size = batch_size
         self.code_size = d_latent
         self._stage = 0
@@ -144,11 +155,12 @@ class VAEExperiment(AutoencoderExperiment):
         logging.info("Initialized VAEExperiment:  %s" % (self.get_name(),))
 
     def get_name(self, file_kind=None, suffix=None):
+        drop_str = "" if self.dropout_info is None else "_Drop(l=%i,r=%.2f)" % (self.dropout_info['layer'], self.dropout_info['rate'])
+        pca_str = self.pca.get_short_name()
+        decoder_str = "_Decoder-%s" % "-".join(map(str, self.dec_layer_desc)) if self.dec_layer_desc is not None else ""
+        encoder_str = "_Encoder-%s" % "-".join(map(str, self.enc_layer_desc))
 
-        dim_str = "-".join(map(str, self.enc_layer_desc))
-        root = ("VAE-TORCH(pca=%i_hidden=%s_d-latent=%i_reg-lambda=%.5f)" %
-                (self._d_in, dim_str, self.code_size, self.reg_lambda))
-
+        root = ("VAE-TORCH(%s%s%s%s_Dlatent=%i_RegLambda=%.3f)" %  (pca_str, encoder_str, drop_str, decoder_str, self.code_size, self.reg_lambda))
         if suffix is not None:
             root = "%s_%s" % (root, suffix)
 
@@ -176,14 +188,29 @@ class VAEExperiment(AutoencoderExperiment):
                              reg_lambda=reg_lambda)
 
     def _init_model(self):
+        dec_layers = self.enc_layer_desc[::-1] if self.dec_layer_desc is None else self.dec_layer_desc
         self.model = VAE(input_dim=self._d_in,
-                         hidden_dims=self.enc_layer_desc,
+                         enc_hidden_dims=self.enc_layer_desc,
+                         dec_hidden_dims=dec_layers,
                          latent_dim=self.code_size,
                          output_dim=self._d_out,
                          device=self.device,
+                         dropout_info=self.dropout_info,
                          lambda_reg=self.reg_lambda).to(self.device)
 
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
+        self.print_model_architecture(self.model.encoder, self.model.decoder, self.model)
+
+    def print_model_architecture(self, encoder, decoder, model):
+        logging.info("Model architecture:")
+        logging.info("Encoder:")
+        for layer in encoder.children():
+            logging.info("  %s" % (layer,))
+        logging.info("Decoder:")
+        for layer in decoder.children():
+            logging.info("  %s" % (layer,))
+        logging.info("VAE:")
+        logging.info("  %s" % (model,))
 
     def train_more(self, epochs=25):
         x_train_tensor = torch.from_numpy(self.x_train_pca).float()
@@ -397,7 +424,12 @@ class VAEExperiment(AutoencoderExperiment):
         for i in range(len(ax)-1):
             ax[i].set_xticklabels([])
             ax[i].grid(True)
+            
+            ax[i].set_xscale('log')
+
         ax[3].grid(True)
+        ax[3].set_xscale('log')
+
 
         plt.tight_layout()
         if self._save_figs:
@@ -566,6 +598,7 @@ def vae_demo():
         d_latent=args.d_latent,
         reg_lambda=args.reg_lambda,
         pca_dims=args.pca_dims,
+        dropout_info=args.dropout,
     )
     ve.run_staged_experiment(n_stages=args.stages, n_epochs=args.epochs, save_figs=args.no_plot)
 
