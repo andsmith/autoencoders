@@ -1,9 +1,13 @@
+import cv2
 import numpy as np
 from scipy.spatial import KDTree
 import matplotlib.pyplot as plt
 import logging
 import seaborn as sns
-from colors import COLORS, bgr2rgb
+from torch import layout, std
+from colors import COLORS, MPL_CYCLE_COLORS, bgr2rgb
+from util import fit_spaced_intervals
+import cv2
 
 
 class LatentDigitDist(object):
@@ -16,9 +20,16 @@ class LatentDigitDist(object):
     """
 
     def __init__(self, values, digit_labels, sts=2.5, colors=None):
+        """
+        :param values: Latent unit activations
+        :param digit_labels: Corresponding digit labels
+        :param sts: Standard deviations defining outlier threshold.
+        :param colors: Optional colors for the plot
+        """
         self.colors = colors if colors is not None else (np.array(sns.color_palette("husl", 10))*255.0).astype(int)
         self.values = values
         self.digit_labels = digit_labels
+        self.n_digits = len(np.unique(digit_labels))
         self.sts = sts  # standard deviations for range around mean to draw line
         self._calc_stats()
 
@@ -27,7 +38,8 @@ class LatentDigitDist(object):
         Calculate statistics for the latent distributions.
         """
         self.stats = {'digits': {},
-                      'range': (np.min(self.values), np.max(self.values))}
+                      'range': (np.min(self.values), np.max(self.values)),
+                      'total': None}
 
         def _mk_stats(values):
 
@@ -44,7 +56,7 @@ class LatentDigitDist(object):
                 "outliers": outliers
             }
 
-        for digit in np.unique(self.digit_labels):
+        for digit in range(self.n_digits):
             digit_values = self.values[self.digit_labels == digit]
             self.stats['digits'][digit] = _mk_stats(digit_values)
             if digit == 2:
@@ -52,40 +64,198 @@ class LatentDigitDist(object):
 
         self.stats['total'] = _mk_stats(self.values)
 
+    def calc_size_layout(self, orient, thicknesses, space, n_digits=10):
+        """
+        Compute where everything goes on the non-value axis, i.e. where
+        the center of each boxplot is.
+        """
+        band_size = np.max(thicknesses)
+        if orient == 'vertical':
+            y = 0
+            band_spans = []
+            for d in range(n_digits):
+                band_spans.append((y, y + band_size))
+                y += band_size + space
+            size = y-space
+        else:
+            x = 0
+            band_spans = []
+            for d in range(n_digits):
+                band_spans.append((x, x + band_size))
+                x += band_size + space
+            size = x-space
+        layout = {'bands': band_spans,
+                  'size': size}
+        print("-------------------------------->   ", size)
+        return layout
+
     def render(self,
                image,
-               bbox,
+               loc_xy,
+               scale,
+               orient='vertical',
+               thicknesses_px=(1, 3, 5, 7),
+               separation_px=2,
+               alphas=(.75, 0.6, 0.8, 1.0),
                digit_subset=None,
-               thicknesses=(1, 3, 5),
-               alphas=(.75, 0.65, 0.8, 1.0),
-               val_range=None, centered=True, orient='vertical',
-               show_axis=True, indent=False):
+               val_span=None,
+               centered=False,
+               show_axis=True):
         """
         Render the latent digit distribution on the given image.
         :param image:  H x W x 3  uint8 array
-        :param bbox:   Dictionary with 'x' and 'y' keys containing tuples (min, max)
+        :param loc_xy:  (x, y) coordinates for the top-left corner of the plot
+        :param scale:   Width of the plot area if orient='horizontal', height if orient='vertical'
         :param digit_subset: Optional list of digits to include in the plot
-        :param thicknesses:  3-tuple, Line thicknesses for  3-sigma & outliers, IRQ, medians, respectively
+        :param thicknesses_px:  4-tuple, Line thicknesses in pixels  for  outliers, 3-sigma , IRQ, medians, respectively
+        :param separation_px:  space between lines in pixels.
         :param alphas:  4-tuple, Opacity values for the outliers, 3-sigma, IRQ, median respectively.
         :returns: bbox actually drawn in (can be smaller to make spacing even)
         """
-        band_w = np.max(thicknesses) + thicknesses[1]
-        dband_w = band_w*2  # double band for overall dist. plot.
+
+        bkg_color = image[loc_xy[1], loc_xy[0], :]
+        total_color = (0, 0, 0) if np.mean(bkg_color) > 128 else (255, 255, 255)
+        total_color = np.array(total_color)
         n_digits = 10 if digit_subset is None else len(digit_subset)+1  # include total distribution w/subsets
+        layout = self.calc_size_layout(orient, thicknesses_px, separation_px, n_digits=n_digits)
+        low, high = self.stats['range'] if val_span is None else val_span
+        val_span = (low, high)
+        val_range = high-low
+
+        plot_px_range = layout['size']
+        value_px_range = scale
+
+        if orient == 'vertical':
+            plot_px_span = loc_xy[0], loc_xy[0] + layout['size']
+            value_px_span = loc_xy[1], loc_xy[1] + scale
+            width = layout['size']
+            height = scale
+        elif orient == 'horizontal':
+            plot_px_span = loc_xy[1], loc_xy[1] + layout['size']
+            value_px_span = loc_xy[0], loc_xy[0] + scale
+
+            width = scale
+            height = layout['size']
+        else:
+            raise ValueError("Unknown orientation: %s" % orient)
+
+        def scale_value(val, flip=False):
+            if flip:
+                return (((high - val) / val_range) * value_px_range + value_px_span[0])
+            return (((val - low) / val_range) * value_px_range + value_px_span[0])
+
+        def _fade_color(x_span, y_span,  color, alpha):
+            bkg = image[y_span[0]:y_span[1], x_span[0]:x_span[1]]
+            patch = (1 - alpha) * bkg + alpha * color
+            image[y_span[0]:y_span[1], x_span[0]:x_span[1]] = patch
+
+        def draw_axis():
+            axis_pos = int(scale_value(0.0))
+            if orient == 'vertical':
+                x0, x1 = plot_px_span
+                y0, y1 = axis_pos, axis_pos + 1
+            elif orient == 'horizontal':
+                x0, x1 = axis_pos, axis_pos + 1
+                y0, y1 = plot_px_span
+            _fade_color((x0, x1), (y0, y1), total_color, alphas[0])
+
+        def draw_line(value_span, width_span, thickness, alpha, color):
+            small, big = value_span
+
+            shift = ((width_span[1] - width_span[0]) - thickness) // 2
+
+            small_v = int(scale_value(small))
+            big_v = int(scale_value(big))
+            if big_v < small_v:
+                small_v, big_v = big_v, small_v
+            big_v = np.clip(big_v, value_px_span[0], value_px_span[1])
+            small_v = np.clip(small_v, value_px_span[0], value_px_span[1])
+
+            if orient == 'vertical':
+                x0 = width_span[0] + shift
+                x1 = x0 + thickness
+                y0, y1 = small_v, big_v
+
+            else:
+                x0, x1 = small_v, big_v
+                y0 = width_span[0] + shift
+                y1 = y0 + thickness
+            _fade_color((x0, x1), (y0, y1), color, alpha)
+
+        def draw_dots(values, width_span, size, alpha, color):
+            shift = ((width_span[1] - width_span[0]) - size) // 2
+            for value in values:
+                x = (scale_value(value)).astype(int)
+
+                small_v = x - size // 2
+                big_v = small_v + size
+                big_v = np.clip(big_v, value_px_span[0], value_px_span[1])
+                small_v = np.clip(small_v, value_px_span[0], value_px_span[1])
+
+                if orient == 'vertical':
+                    x0 = width_span[0] + shift
+                    x1 = x0 + size
+                    y0, y1 = small_v, big_v
+
+                else:
+                    x0, x1 = small_v, big_v
+                    y0 = width_span[0] + shift
+                    y1 = y0 + size
+                _fade_color((x0, x1), (y0, y1), color, alpha)
+
+        def draw_dist(stats, band_ind, color):
+            #  Draw a single row/column plot
+            offset = (loc_xy[0] if orient == 'vertical' else loc_xy[1])
+            band_span = np.array(layout['bands'][band_ind]) + offset
+            mean, median, std = stats['mean'], stats['median'], stats['std']
+            iqr, outliers = stats['iqr'], stats['outliers']
+            width_span = np.array(layout['bands'][band_ind]) + offset
+            draw_line(value_span=(mean - self.sts * std, mean + self.sts * std),
+                      width_span=width_span,
+                      thickness=thicknesses_px[1], alpha=alphas[1], color=color)
+
+            draw_line(value_span=(mean - iqr, mean + iqr), width_span=width_span,
+                      thickness=thicknesses_px[2], alpha=alphas[2], color=color)
+            draw_dots([median], width_span=width_span, size=thicknesses_px[3],
+                       alpha=alphas[3], color=color)
+            draw_dots(outliers, width_span=width_span, size=thicknesses_px[0], alpha=alphas[0], color=color)
+
+        draw_axis()
+        # import ipdb; ipdb.set_trace()
+
+        if digit_subset is None:
+
+            for digit in range(10):
+                draw_dist(self.stats['digits'][digit], band_ind=digit, color=self.colors[digit])
+        else:
+            draw_dist(self.stats['total'], band_ind=0, color=total_color)
+            for ds_ind, digit in enumerate(digit_subset):
+                draw_dist(self.stats['digits'][digit], band_ind=ds_ind + 1, color=self.colors[ds_ind])
+
+        bbox = {'x': (loc_xy[0], loc_xy[0] + width),
+                'y': (loc_xy[1], loc_xy[1] + height)}
+
+        return bbox
+        """
         width, height = bbox['x'][1] - bbox['x'][0], bbox['y'][1] - bbox['y'][0]
         px_scale = height if orient == 'vertical' else width
-        px_b_range = list(bbox['x'] if orient == 'vertical' else bbox['y'])
-        px_a_range = list(bbox['y'] if orient == 'vertical' else bbox['x'])
-        if indent:
-            locs = np.linspace(px_b_range[0], px_b_range[1], n_digits + 2)[1:-1]
-        else:
-            locs = np.linspace(px_b_range[0], px_b_range[1], n_digits)
+        px_digit_range = list(bbox['x'] if orient == 'vertical' else bbox['y'])
+        px_value_range = list(bbox['y'] if orient == 'vertical' else bbox['x'])
 
-        # make sure they're evenly spaced
-        smallest = np.min(np.diff(locs.astype(int)))
-        locs = int(locs[0]) + np.arange(n_digits+1, dtype=int) * smallest
-        px_b_range[1] = locs[-1]  # adjust width so bounding box is tight
-        locs = locs[:-1]
+        band_spans = fit_spaced_intervals(px_digit_range,
+                                          n_digits,
+                                          spacing_fraction=.1,
+                                          min_spacing=separation_px,
+                                          fill_extent=False)
+        band_width = band_spans[0][1] - band_spans[0][0]
+        # adjust so they're all odd spaced.
+        if band_width % 2 == 0:
+            band_width -= 1
+
+        band_centers = [(span[0] + span[1]) // 2 for span in band_spans]
+
+        thicknesses_rel = thicknesses_rel / np.max(thicknesses_rel)
+        thicknesses = (thicknesses_rel*band_width).astype(int)
 
         low, high = self.stats['range'] if val_range is None else val_range
 
@@ -95,24 +265,26 @@ class LatentDigitDist(object):
             high = dist
 
         val_range = high - low
+        print("--> Val Range:", val_range, px_digit_range)
 
-        def draw_axis(thickness, alpha, color):
-            t = int(thickness)
-            if orient == 'vertical':
-                y0 = int(px_a_range[0] + px_scale / 2.0 - t/2.0)
-                y1 = y0 + t
-                x0, x1 = px_b_range
-            else:
-                x0 = int(px_a_range[0] + px_scale / 2.0 - t/2.0)
-                x1 = x0 + t
-                y0, y1 = px_b_range
-            color_shade = _fade_color(image[y0:y1, x0:x1], color, alpha)
-            image[y0:y1, x0:x1] = color_shade
-
-        def _draw_dist(digit_stats, x_loc, color, thick_mul=1.0):
+        def _draw_dist(digit_stats, band_, color, thick_mul=1.0):
 
             def _scale_value(val):
-                return (((val - low) / val_range) * px_scale + px_a_range[0])
+                return (((val - low) / val_range) * px_scale + px_value_range[0])
+
+            def draw_axis(thickness, alpha, color):
+                t = int(thickness)
+
+                if orient == 'vertical':
+                    y0 = int(_scale_value(0.0)) - t//2
+                    y1 = y0 + t
+                    x0, x1 = px_digit_range
+                else:
+                    x0 = int(_scale_value(0.0)) - t//2
+                    x1 = x0 + t
+                    y0, y1 = px_digit_range
+                color_shade = _fade_color(image[y0:y1, x0:x1], color, alpha)
+                image[y0:y1, x0:x1] = color_shade
 
             def draw_dots(values, alpha, thickness=None):
 
@@ -123,14 +295,14 @@ class LatentDigitDist(object):
                 x1 = x0 + t
 
                 y_vals = (_scale_value(values) + t/2).astype(int)-1
-                y_vals = np.clip(y_vals, px_a_range[0], px_a_range[1] - t)  # Ensure within
+                y_vals = np.clip(y_vals, px_value_range[0], px_value_range[1] - t)  # Ensure within
 
                 for y in y_vals.reshape(-1, 1):
                     small_y = int(y[0] - t/2.0-1)
                     big_y = small_y + t
 
-                    big_y = min(big_y, px_a_range[1] - t)
-                    small_y = max(small_y, px_a_range[0])
+                    big_y = min(big_y, px_value_range[1] - t)
+                    small_y = max(small_y, px_value_range[0])
 
                     if orient == 'vertical':
                         color_shade = _fade_color(image[small_y:big_y, x0:x1], color, alpha)
@@ -139,21 +311,20 @@ class LatentDigitDist(object):
                         color_shade = _fade_color(image[x0:x1, small_y:big_y], color, alpha)
                         image[x0:x1, small_y:big_y] = color_shade
 
-            def draw_line(small, big, thickness, alpha, min_h=0):
-                t = int(thickness * thick_mul)
-                t += (1 - t % 2)
-
-                x0 = int(x_loc)
-                x1 = x0 + t
+            def draw_line(band_ind, small, big, min_h=0):
+                thickness, alpha = thicknesses[band_ind], alphas[band_ind]
+                low, high = band_spans[band_ind]
+                band_center = d
                 small_y = int(_scale_value(small))
                 big_y = int(_scale_value(big))
                 if big_y < small_y:
                     small_y, big_y = big_y, small_y
                 if min_h is not None and big_y-small_y < min_h:
                     big_y = small_y + min_h
-                big_y = min(big_y, px_a_range[1] - t)
-                small_y = max(small_y, px_a_range[0])
+                big_y = min(big_y, px_value_range[1] - t)
+                small_y = max(small_y, px_value_range[0])
                 if orient == 'vertical':
+                    x0 = int(x_loc - thickness/2.0)
                     color_shade = _fade_color(image[small_y:big_y, x0:x1], color, alpha)
                     image[small_y:big_y, x0:x1] = color_shade
                 else:
@@ -167,39 +338,213 @@ class LatentDigitDist(object):
             median = digit_stats['median']
 
             # draw a zero-line first:
-            draw_line(mean - self.sts * std, mean + self.sts * std, thicknesses[0], alphas[1])
-            draw_line(mean - iqr, mean + iqr, thicknesses[1], alphas[2])
-            draw_dots(median,  thickness=thicknesses[2], alpha=alphas[3])
-            draw_dots(outliers, alphas[0], thickness=thicknesses[0])
+            draw_axis(thickness=1, color=total_color, alpha=0.3)
+            draw_line(mean - self.sts * std, mean + self.sts * std, thicknesses[1], alphas[1])
+            # draw_line(mean - iqr, mean + iqr, thicknesses[2], alphas[2])
+            # draw_dots(median,  thickness=thicknesses[3], alpha=alphas[3])
+            # draw_dots(outliers, alphas[0], thickness=thicknesses[0])
 
         # Start drawing:
 
-        bkg_color = image[bbox['y'][0], bbox['x'][0], :]
-        total_color = (0, 0, 0) if np.mean(bkg_color) > 128 else (255, 255, 255)
-        total_color = np.array(total_color)
-        if show_axis:
-            draw_axis(1, alpha=0.3, color=total_color)
-
         if digit_subset is None:
-            for digit, x_pos in enumerate(locs):
+            for digit, span in enumerate(band_spans):
 
-                _draw_dist(self.stats['digits'][digit], x_pos, self.colors[digit])
+                _draw_dist(self.stats['digits'][digit], span, self.colors[digit])
         else:
+            _draw_dist(self.stats['total'], band_spans[0], color=total_color)
 
-            _draw_dist(self.stats['total'], locs[0], color=total_color, thick_mul=1.0)
             for ds_ind, digit in enumerate(digit_subset):
+
                 digit_color = self.colors[ds_ind]
-                _draw_dist(self.stats['digits'][digit], locs[ds_ind + 1], color=digit_color)
+                _draw_dist(self.stats['digits'][digit], band_spans[ds_ind + 1], color=digit_color)
 
         # Finally, return adjusted bbox
         if orient == 'vertical':
-            new_bbox = {'x': (bbox['x'][0], px_b_range[1]),
+            new_bbox = {'x': (bbox['x'][0], px_digit_range[1]),
                         'y': bbox['y']}
         else:
             new_bbox = {'x': bbox['x'],
-                        'y': (bbox['y'][0], px_b_range[1])}
+                        'y': (bbox['y'][0], px_digit_range[1])}
 
         return image, new_bbox
+        """
+
+
+def test_latentdigitdist():
+    image1 = np.zeros((650, 1000, 3), dtype=np.uint8)
+    image2 = np.zeros((1000, 650, 3), dtype=np.uint8)
+    image1[:] = 255
+    image2[:] = 255
+    bkg_color = image1[0, 0, :]
+    rand_state[0] = np.random.RandomState(1)
+
+    def show_test(image, orient):
+        spacing = 10
+        value_axis_scale = 200
+        plot_axis_scale = 70
+
+        if orient == 'vertical':
+            width = plot_axis_scale
+            height = value_axis_scale
+            n_bands = int(image.shape[1] / (width + spacing))
+        else:
+            width = value_axis_scale
+            height = plot_axis_scale
+            n_bands = int(image.shape[0] / (height + spacing))
+
+        x_offset = 20
+        y_offset = 20
+
+        for trial in range(n_bands * 2):
+            # rand_state[0] = np.random.RandomState(3)  # each plot is the same
+
+            # if trial == n_bands:
+
+            bbox = {'x': (x_offset, x_offset + width),
+                    'y': (y_offset, y_offset + height)}
+            data = _mk_data(5)
+            dist = LatentDigitDist(*data)
+
+            if trial >= n_bands:
+                kwargs = dict(thicknesses_px=[3, 3, 3, 3],
+                              alphas=[0.8, .5, .75, 1.])
+            else:
+                kwargs = dict(thicknesses_px=[2, 1, 3, 5],
+                              alphas=[0.8, .5, .75, 1.])
+
+            if trial % 2 == 0:
+                kwargs['digit_subset'] = [0, 1, 3, 5, 8]
+            loc_xy = (bbox['x'][0], bbox['y'][0])
+
+            print(loc_xy, "Scale:  ", value_axis_scale, orient)
+
+            d_bbox = dist.render(image, loc_xy, scale=value_axis_scale, orient=orient, **kwargs)
+            cv2.putText(image, "%i" % trial, (d_bbox['x'][0], d_bbox['y'][0]),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, 0, 1, lineType=cv2.LINE_AA)
+
+            draw_bbox(image, d_bbox, thickness=1, inside=False, color=(256-bkg_color))
+
+            if orient == 'vertical':
+                x_offset += width + spacing
+                if x_offset + width > image.shape[1]:
+                    y_offset += height + 200
+                    x_offset = 20
+            else:
+                y_offset += height + spacing
+                if y_offset + height > image.shape[0]:
+                    y_offset = 20
+                    x_offset += width + spacing
+        plt.imshow(image)
+        plt.show()
+    show_test(image2, 'horizontal')
+    show_test(image1, 'vertical')
+
+
+class LatentCodeSet(object):
+    """
+    A LatentDigitDist object for each encoding unit.
+    """
+
+    def __init__(self, test_codes, test_labels, digit_subset=None, colors=None):
+        self.test_codes = test_codes
+        self.test_labels = test_labels
+        self.digit_subset = digit_subset
+        if colors is None:
+            if self.digit_subset is not None:
+                colors = [np.array(MPL_CYCLE_COLORS[i]) for i in range(len(self.digit_subset))]
+            else:
+                colors = (np.array(sns.color_palette("husl", 10))*255.0).astype(int).tolist()
+        self.colors = colors
+
+        self._init_dists()
+
+    def _init_dists(self):
+        self.ldds = []
+        self.code_size = self.test_codes.shape[1]
+
+        for code_unit in range(self.code_size):
+            self.ldds.append(LatentDigitDist(self.test_codes[:, code_unit], self.test_labels,
+                             colors=self.colors))
+
+    def get_latent_distribution(self):
+        # Compute the latent distribution for each digit
+        pass
+
+    def _calc_layout(self, size_wh, bbox, orient, n_codes, pad_frac):
+        """
+        Determine the layout for the latent code visualizations:
+            height of each code's bbox,
+            thicknesses of lines
+            padding between each bbox
+        """
+        x_span, y_span = bbox['x'], bbox['y']
+        w, h = (x_span[1] - x_span[0], y_span[1] - y_span[0])
+
+        if orient == 'horizontal':
+
+            bbox_y = np.array(fit_spaced_intervals(y_span, n_codes, spacing_fraction=pad_frac))
+            bbox_x = np.zeros_like(bbox_y) + np.array(x_span).reshape(1, 2)
+        else:
+
+            # Compute layout for horizontal orientation
+            bbox_x = np.array(fit_spaced_intervals(x_span, n_codes, spacing_fraction=pad_frac))
+            bbox_y = np.zeros_like(bbox_x) + np.array(y_span).reshape(1, 2)
+        bboxes = [dict(x=tuple(x0.tolist()), y=tuple(y0.tolist())) for x0, y0 in zip(bbox_x, bbox_y)]
+        return bboxes
+
+    def _calc_lighting(self, size_wh, orient, n_codes, pad_frac):
+        # STUB, TODO:  calculate good sizing for these
+        thicknesses = (2, 8, 8, 8)
+        alphas = (.75, 0.65, 0.8, 1.0)
+        return thicknesses, alphas
+
+    def render(self, image, bbox, orient='horizontal', same_scale=False, sep_factor=0.2, **kwargs):
+        """
+        Render the distribution of each code unit's activations.
+
+        :param image: The image to render on
+        :param bbox: The bounding box to draw inside
+        :param orient: The orientation of each code's boxplot
+        :param same_scale: If True, use the same scale for all code unit, otherwise use individual scales for each.
+        :param sep_factor: Each code's set of boxplots will be separated by this factor.
+
+
+        """
+        scale = (np.min(self.test_codes), np.max(self.test_codes)) if same_scale else None
+        size_wh = image.shape[:2][::-1]
+        bboxes = self._calc_layout(size_wh, bbox, orient, n_codes=len(self.ldds), pad_frac=sep_factor)
+        thicknesses, alphas = self._calc_lighting(size_wh, orient, len(self.ldds), pad_frac=sep_factor)
+        # Draw each latent code's distribution
+        for i, (ldd, box) in enumerate(zip(self.ldds, bboxes)):
+            # Compute the layout for this code
+            # Render the distribution
+            ldd.render(image, box, digit_subset=self.digit_subset,
+                       val_range=scale, centered=not same_scale,
+                       orient=orient, **kwargs)
+
+            draw_bbox(image, box, thickness=1, inside=True, color=[0, 255, 0])
+
+
+def test_latent_codeset(code_size=10):
+    image_size_wh = (300, 900)
+    blank = np.zeros((image_size_wh[1], image_size_wh[0], 3), dtype=np.uint8)
+    blankT = np.zeros((image_size_wh[0], image_size_wh[1], 3), dtype=np.uint8)
+    bkg_color = np.array(COLORS['OFF_WHITE_RGB'])
+    blank[:] = bkg_color
+    blankT[:] = bkg_color
+    labels, codes = mkd_dataset(code_size=code_size)
+    ls = LatentCodeSet(test_codes=codes, test_labels=labels, digit_subset=[0, 1, 3, 8])
+    bbox = {'x': (10, image_size_wh[0]-10), 'y': (10, image_size_wh[1]-10)}
+    ls.render(blank, bbox, orient='horizontal', same_scale=True, sep_factor=0.2)
+    bboxT = {'x': (10, image_size_wh[1]-10), 'y': (10, image_size_wh[0]-10)}
+    ls.render(blankT, bboxT, orient='vertical', same_scale=True, sep_factor=0.2)
+    fig, ax = plt.subplots(1, 2, figsize=(12, 6))
+    ax[0].imshow(blank)
+    ax[0].axis('off')
+    ax[1].imshow(blankT)
+    ax[1].axis('off')
+    plt.tight_layout()
+    plt.show()
 
 
 def draw_bbox(image, bbox, thickness=1, inside=True, color=(128, 128, 128)):
@@ -261,109 +606,16 @@ def _mk_data(n=500):
     return values, digit_labels
 
 
-def _fade_color(bkg, color, alpha):
-    return (1-alpha)*bkg + alpha*color
-
-
-def test():
-    image1 = np.zeros((70, 120, 3), dtype=np.uint8)
-    image2 = np.zeros((120, 70, 3), dtype=np.uint8)
-    image1[:] = 255
-    image2[:] = 255
-    image3, image4 = image1.copy(), image2.copy()
-    # x, y = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
-    # check = (x+y) % 2
-    # image[check == 0] = (255, 255, 255)
-
-    def _mk_flat_data(n, span=(-1, 1)):
-        # like mk_data, but linearly spanning span[0] to span[1]
-        values = np.linspace(span[0], span[1], n)
-        value_mat = np.concatenate([values*(1/(i+1)) for i in range(10)], axis=0).flatten()
-        value_mat[3*n:4*n] += 0.4
-        label_mat = np.concatenate([i*np.ones(n) for i in range(10)]).astype(int)
-        return value_mat, label_mat
-    data = _mk_flat_data(400)
-    bkg_color = image1[0, 0, :]
-    dist = LatentDigitDist(*_mk_flat_data(500))
-    bbox1 = {'y': (10, 60), 'x': (10, 110)}
-
-    draw_bbox(image1, dist.render(image1, bbox1, val_range=(-2, 2), orient='horizontal')[1],
-              thickness=1, inside=True, color=(256-bkg_color))
-
-    draw_bbox(image3, dist.render(image3, bbox1, val_range=(-2, 2), thicknesses=[2, 2, 2], orient='horizontal')[1],
-              thickness=1, inside=True, color=(256-bkg_color))
-
-    bbox2 = {'x': (10, 60), 'y': (10, 110)}
-
-    draw_bbox(image2,  dist.render(image2, bbox2, val_range=(-2, 2), orient='vertical')[1],
-              thickness=1, inside=True, color=(256-bkg_color))
-
-    draw_bbox(image4, dist.render(image4, bbox2, val_range=(-2, 2), orient='vertical', thicknesses=[2, 2, 2])[1],
-              thickness=1, inside=True, color=(256-bkg_color))
-    images = [image1, image2, image3, image4]
-    fig, ax = plt.subplots(2, 2)
-    ax = ax.flatten()
-    for ax, img in zip(ax, images):
-        ax.imshow(img)
+def test_Mk_data():
+    data = _mk_data(500)
+    for digit in range(10):
+        plt.scatter(data[0][data[1] == digit], np.ones_like(data[0][data[1] == digit]) * digit, label=str(digit))
+    plt.legend()
     plt.show()
 
 
-def test_latentdigitdist():
-    image1 = np.zeros((480, 640, 3), dtype=np.uint8)
-    image2 = np.zeros((640, 480, 3), dtype=np.uint8)
-    image1[:] = 255
-    image2[:] = 255
-    bkg_color = image1[0, 0, :]
-
-    def show_test(image, orient):
-        spacing = 10
-
-        if orient == 'vertical':
-            width = 50
-            height = 210
-            n_bands = int(image.shape[1] / (width + spacing))
-        else:
-            width = 210
-            height = 50
-            n_bands = int(image.shape[0] / (height + spacing))
-
-        x_offset = 20
-        y_offset = 20
-
-        for trial in range(n_bands * 2):
-            rand_state[0] = np.random.RandomState(42)
-
-            # if trial == n_bands:
-
-            bbox = {'x': (x_offset, x_offset + width),
-                    'y': (y_offset, y_offset + height)}
-            dist = LatentDigitDist(*_mk_data(500))
-
-            if trial >= n_bands:
-                kwargs = dict(thicknesses=[3, 3, 3],
-                              alphas=[0.8, .5, .75, 1.])
-            else:
-                kwargs = dict(thicknesses=[1, 3, 5],
-                              alphas=[1, 1, 1, 1.])
-
-            if trial % 2 == 0:
-                kwargs['digit_subset'] = [0, 1, 3, 5, 8]
-
-            d_bbox = dist.render(image, bbox, orient=orient, **kwargs)[1]
-
-            draw_bbox(image, d_bbox, thickness=1, inside=True, color=(256-bkg_color))
-
-            x_offset += width + spacing
-
-            if x_offset + width > image.shape[1]:
-                y_offset += height + spacing
-                x_offset = 20
-
-        plt.imshow(image)
-        plt.show()
-
-    show_test(image1, 'vertical')
-    show_test(image2, 'horizontal')
+def _fade_color(bkg, color, alpha):
+    return (1-alpha)*bkg + alpha*color
 
 
 def calc_scale(n_pixels, n_plots):
@@ -375,17 +627,28 @@ def calc_scale(n_pixels, n_plots):
         t = 3
     # Keep thickness odd!
     height = int(t*3)
-    pad = int(max(3,t*2))
-    return height, t, pad   
+    pad = int(max(3, t*2))
+    return height, t, pad
+
+
+def mkd_dataset(code_size=30, n_samples=10000):
+
+    digit_labels = np.random.randint(0, 10, n_samples)
+    codes = np.zeros((n_samples, code_size), dtype=np.float32)
+    for c in range(code_size):
+        for d in range(10):
+            mask = digit_labels == d
+            mean = np.random.rand() * 0.5 + 0.5
+            std = np.random.rand() * 0.2
+            codes[mask, c] = np.random.normal(mean, std, size=np.sum(mask))
+    return digit_labels, codes
 
 
 def test_latent_compact():
     """
 
 
-    TODO:  MOVE TO CLASS
-
-
+    TODO:  MOVE TO CLASS  (is now LatentCodeSet)
 
     Create an image comparing VAE latent variable distributions.
     Each column is a model, under it are horizontally oriented LatentDigitDist plots of
@@ -405,10 +668,9 @@ def test_latent_compact():
               COLORS['MPL_ORANGE_RGB'],
               COLORS['MPL_GREEN_RGB']]
     colors = [np.array(c) for c in colors]
-    
+
     for i, (model, data) in enumerate(zip(model_sizes, model_data)):
         height, t, pad_y = calc_scale(dist_size_wh[1], model)
-        print(height, t, pad_y)
 
         model_pad_x = ((image_size[0] - grid_shape[1] * dist_size_wh[0]) / (grid_shape[1] + 1))
 
@@ -429,8 +691,8 @@ def test_latent_compact():
                                                                                  t, t, t], alphas=[.2, .5, .5, 1],
                                                                              digit_subset=digit_subset)[1]
                 bottom = d_bbox['y'][1]
-                
-                #draw_bbox(blank, d_bbox, thickness=1, inside=True, color=(256 - bkg_color))
+
+                # draw_bbox(blank, d_bbox, thickness=1, inside=True, color=(256 - bkg_color))
             except Exception as e:
                 # raise e
                 break
@@ -446,9 +708,11 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     # test_make_random_cov(n_points=10000, plot=True)
     # test_make_data(d=2, plot=True)
-
+    # test_Mk_data()
+    
     test_latentdigitdist()
-    test_latent_compact()
+    # test_latent_compact()
+    # test_latent_codeset()
 
     # test()
 
