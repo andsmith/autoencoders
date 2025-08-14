@@ -119,15 +119,6 @@ class VAEExperiment(AutoencoderExperiment):
         self.enc_layer_desc = enc_layers
         self.batch_size = batch_size
         self.code_size = d_latent
-        self._history_dict = {
-            'train-loss': [],
-            'train-mse': [],
-            'train-kld': [],
-            'val-loss': [],
-            'val-kld': [],
-            'val-mse': [],
-            'lambda': []
-        }
         self._stage = 0
         self._epoch = 0
         self.reg_lambda = reg_lambda
@@ -141,6 +132,15 @@ class VAEExperiment(AutoencoderExperiment):
         self._d_in = pca_dims
         self._d_out = 28*28
         super().__init__(pca_dims=pca_dims, **kwargs)
+        self._history_dict = {
+            'loss': [],
+            'mse': [],
+            'kld': [],
+            'val-loss': [],
+            'val-kld': [],
+            'val-mse': [],
+            'lambda': []
+        }
         logging.info("Initialized VAEExperiment:  %s" % (self.get_name(),))
 
     def get_name(self, file_kind=None, suffix=None):
@@ -216,9 +216,9 @@ class VAEExperiment(AutoencoderExperiment):
                 self.optimizer.step()
                 train_losses.append(loss.item())
             avg_train_loss = np.mean(train_losses)
-            self._history_dict['train-loss'].append(avg_train_loss)
-            self._history_dict['train-mse'].append(np.mean(train_loss_terms['mse']))
-            self._history_dict['train-kld'].append(np.mean(train_loss_terms['kld']))
+            self._history_dict['loss'].append(avg_train_loss)
+            self._history_dict['mse'].append(np.mean(train_loss_terms['mse']))
+            self._history_dict['kld'].append(np.mean(train_loss_terms['kld']))
             self.model.eval()
             test_losses = []
             test_loss_terms = {'kld': [], 'mse': []}
@@ -239,36 +239,18 @@ class VAEExperiment(AutoencoderExperiment):
             self._history_dict['lambda'].append(self.model.lambda_reg)
             print(f"Epoch {epoch+1}/{epochs} ({duration:.4f}s), " +
                   f"Training Loss: {avg_train_loss:.4f}," +
-                  f"(MSE: {self._history_dict['train-mse'][-1]:.4f}, " +
-                  f"KLD: {self._history_dict['train-kld'][-1]:.4f}), " +
+                  f"(MSE: {self._history_dict['mse'][-1]:.4f}, " +
+                  f"KLD: {self._history_dict['kld'][-1]:.4f}), " +
                   f"Test Loss: {avg_test_loss:.4f}  " +
                   f"(MSE: {self._history_dict['val-mse'][-1]:.4f}, " +
                   f"KLD: {self._history_dict['val-kld'][-1]:.4f})")
 
         self.save_weights()
-        self._save_history()
-
-    def _save_history(self):
-        filename = self.get_name(file_kind='history')
-        with open(filename, 'wb') as f:
-            pickle.dump(self._history_dict, f)
-        logging.info("Saved training history to %s", filename)
-
-    def _load_history(self):
-        filename = self.get_name(file_kind='history')
-        if not os.path.exists(filename):
-            logging.info("No training history found at %s", filename)
-            return
-        with open(filename, 'rb') as f:
-            self._history_dict = pickle.load(f)
-        logging.info("Loaded training history from %s", filename)
-
+        
     def _attempt_resume(self):
         try:
             logging.info("Attempting to load pre-trained weights...")
             self.load_weights()
-            logging.info("Attempting to load history...")
-            self._load_history()
             return True
         except FileNotFoundError:
             logging.info("No pre-trained weights found, starting fresh training.")
@@ -385,21 +367,21 @@ class VAEExperiment(AutoencoderExperiment):
 
     def _plot_history(self):
         height_ratios = [3, 3, 3, 1]
-        fig, ax = plt.subplots(nrows=4, ncols=1, figsize=(8, 10),
+        fig, ax = plt.subplots(nrows=4, ncols=1, figsize=(8, 10),sharex=True,
                                gridspec_kw={'height_ratios': height_ratios})
-        ax[0].plot(self._history_dict['train-loss'], label='Train Loss')
+        ax[0].plot(self._history_dict['loss'], label='Train Loss')
         ax[0].plot(self._history_dict['val-loss'], label='Validation Loss')
         ax[0].set_title('Loss history', fontsize=12)
         ax[0].legend()
 
         # MSE:
-        ax[1].plot(self._history_dict['train-mse'], label='Train MSE')
+        ax[1].plot(self._history_dict['mse'], label='Train MSE')
         ax[1].plot(self._history_dict['val-mse'], label='Validation MSE')
         ax[1].set_title('Loss, MSE-term history', fontsize=12)
         ax[1].legend()
 
         # KLD:
-        ax[2].plot(self._history_dict['train-kld'], label='Train KLD')
+        ax[2].plot(self._history_dict['kld'], label='Train KLD')
         ax[2].plot(self._history_dict['val-kld'], label='Validation KLD')
         ax[2].set_title('Loss, KLD-term history', fontsize=12)
         ax[2].legend()

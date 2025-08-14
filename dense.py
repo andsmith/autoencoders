@@ -271,14 +271,14 @@ class DenseExperiment(AutoencoderExperiment):
         logging.info("\tMean squared error: %.4f (%.4f)", np.mean(self._mse_errors), np.std(self._mse_errors))
 
     def _plot_history(self):
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+        
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True, gridspec_kw={'height_ratios': [4,1]})
+
         ax1.plot(self._history_dict['loss'])
         ax1.plot(self._history_dict['val_loss'])
-        ax1.set_title('Training history: model loss')
-        ax1.set_ylabel('Loss')
+        ax1.set_title('Loss')
         ax2.plot(self._history_dict['learning_rate'])
-        ax2.set_title('Training history: learning rate')
-        ax2.set_ylabel('Learning Rate')
+        ax2.set_title('Learning Rate')
         ax2.set_xlabel('Epoch')
         # set both axes logarithmic:
         ax1.set_xscale('log')
@@ -287,7 +287,7 @@ class DenseExperiment(AutoencoderExperiment):
         ax1.grid(True, which='both', linestyle='--', linewidth=0.5)
         ax1.legend(['Train', 'Test'], loc='upper right')
         filename = self.get_name(file_ext='image', suffix="_history")
-
+        plt.suptitle("Training History for model \n%s" % self.get_name(), fontsize=14)
         self._maybe_save_fig(fig, filename)
         return None
 
