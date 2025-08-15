@@ -16,8 +16,8 @@ class AutoencoderExperiment(ABC):
     Base class for autoencoder experiments.
     """
 
-    def __init__(self, dataset, pca_dims, whiten_input=False, n_train_samples=0,
-                 bw_images=False,  learning_rate=1e-3):
+    def __init__(self, dataset, pca_dims, enc_layers, dec_layers=None, whiten_input=False, n_train_samples=0,
+                 bw_images=False, d_latent=16, batch_size=512,  learning_rate=1e-3):
         """
         Initialize the AutoencoderExperiment.
         :param pca_dims:
@@ -31,10 +31,12 @@ class AutoencoderExperiment(ABC):
         self.dataset = dataset
         self.whiten_input = whiten_input
         self.learning_rate = learning_rate
-        self.pca = PCA(dims=pca_dims, whiten=whiten_input,dataset=dataset)
-
+        self.pca = PCA(dims=pca_dims, whiten=whiten_input, dataset=dataset)
+        self.code_size = d_latent
+        self.batch_size = batch_size
         self.n_train_samples = n_train_samples
-
+        self.enc_layer_desc = enc_layers
+        self.dec_layer_desc = dec_layers
         self.pca_dims = self._load_data(binarize=bw_images)
         self._d_in = self.pca.d_out  # after loading data
         self._d_out = 784
@@ -152,10 +154,14 @@ class AutoencoderExperiment(ABC):
                             help='If set, each PCA feature is z-scored, else will have its original distribution.')
         parser.add_argument('--dropout_layer', type=int, default=None,
                             help='Which encoding layer uses dropout (index into --layers param, cannot be final/coding layer)')
+        parser.add_argument('--batch_size', type=int, default=256,
+                            help="Batch size for training (Default 256)"),
+        parser.add_argument('--d_latent', type=int, default=16,
+                            help='Dimensionality of the latent space (default: 16)')
         parser.add_argument('--dropout_rate', type=float, default=0.0,
                             help='Dropout rate to apply after each dense layer (default: 0.0)')
         parser.add_argument('--layers', type=int, nargs='+', default=[64],
-                            help='List of encoding layer sizes (default: [64])')
+                            help='List of encoder layer sizes (default: [64])')
         parser.add_argument('--epochs', type=int, default=25,
                             help='Number of epochs to train each stage (default: 25)')
         parser.add_argument('--stages', type=int, default=1,
@@ -165,7 +171,7 @@ class AutoencoderExperiment(ABC):
         parser.add_argument('--no_plot', action='store_true',
                             help='If set, saves images instead of showing them interactively.')
         parser.add_argument('--dec_layers', type=int, nargs='+', default=None,
-                            help='List of decoding layer sizes (default: None, encoding layers reversed)')
+                            help='List of decoder layer sizes (default: None, encoding layers reversed)')
         for arg in (extra_args):
             parser.add_argument(arg['name'], **{k: v for k, v in arg.items() if k != 'name'})
 
@@ -175,7 +181,7 @@ class AutoencoderExperiment(ABC):
         if parsed.dropout_layer is not None:
             if parsed.dropout_rate == 0.0:
                 parser.error("Dropout rate must be > 0.0 if dropout layer is specified.")
-            if parsed.dropout_layer >= len(parsed.layers) - 1:
+            if parsed.dropout_layer >= len(parsed.layers) :
                 parser.error("Dropout layer cannot be the final/coding layer")
             parsed.dropout = {'layer': parsed.dropout_layer,
                               'rate': parsed.dropout_rate}

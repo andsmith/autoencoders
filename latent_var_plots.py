@@ -111,7 +111,7 @@ class LatentDigitDist(object):
         :param alphas:  4-tuple, Opacity values for the outliers, 3-sigma, IRQ, median respectively.
         :returns: bbox actually drawn in (can be smaller to make spacing even)
         """
-        colors =  (np.array(sns.color_palette("husl", 12))*255.0).astype(int)  #colors if colors is not None else
+        colors = (np.array(sns.color_palette("husl", 12))*255.0).astype(int)  # colors if colors is not None else
 
         bkg_color = image[loc_xy[1], loc_xy[0], :]
         total_color = (0, 0, 0) if np.mean(bkg_color) > 128 else (255, 255, 255)
@@ -235,10 +235,10 @@ class LatentDigitDist(object):
             for ds_ind, digit in enumerate(digit_subset):
                 draw_dist(self.stats['digits'][digit], band_ind=ds_ind + 1, color=colors[ds_ind])
 
-        if orient=='vertical':
+        if orient == 'vertical':
             bbox = {'x': plot_px_span,
                     'y': value_px_span}
-            
+
         else:
 
             bbox = {'x': value_px_span,
@@ -454,14 +454,13 @@ class LatentCodeSet(object):
     def __init__(self, test_codes, test_labels, digit_subset=None, colors=None):
         self.test_codes = test_codes
         self.test_labels = test_labels
-        self.digit_subset = digit_subset        
+        self.digit_subset = digit_subset
         if colors is None:
             if self.digit_subset is not None:
                 colors = [np.array(MPL_CYCLE_COLORS[i]) for i in range(len(self.digit_subset))]
             else:
                 colors = (np.array(sns.color_palette("husl", 10))*255.0).astype(int).tolist()
         self.colors = colors
-
 
         self.ldds, self.code_size = LatentCodeSet._init_dists(self.test_codes,
                                                               self.test_labels)
@@ -558,29 +557,30 @@ class LatentCodeSet(object):
         thicknesses, alphas = self._calc_lighting(size_wh, orient, len(self.ldds), pad_frac=sep_factor)
         # Draw each latent code's distribution
         x0, y0 = bbox['x'][0], bbox['y'][0]
-        sep_px=None
+        sep_px = None
         draw_bbox(image, bbox, thickness=1, inside=True, color=[0, 255, 0])
-        
+
         for i, ldd in enumerate(self.ldds):
             # Compute the layout for this code
             # Render the distribution
             pos = (x0, y0)
             try:
-                print("Rendering plot for code unit %d at position %s" % (i, pos)   )
+                print("Rendering plot for code unit %d at position %s" % (i, pos))
                 bbox_out = ldd.render(image, loc_xy=pos, scale=scale, orient=orient,
-                                    thicknesses_px=thicknesses, alphas=alphas, separation_px=2,
-                                    centered=True, show_axis=True,colors=self.colors)
+                                      thicknesses_px=thicknesses, alphas=alphas, separation_px=2,
+                                      centered=True, show_axis=True, colors=self.colors)
             except Exception as e:
-                print("Plot failed", sep_px)    
+                print("Plot failed", sep_px)
             draw_bbox(image, bbox_out, thickness=1, inside=True, color=[255, 0, 0])
-            #import ipdb; ipdb.set_trace()
+            # import ipdb; ipdb.set_trace()
             if orient == 'vertical':
-                sep_px = sep_px if sep_px is not None else  int((bbox_out['x'][1] - bbox_out['x'][0]) * sep_factor)
+                sep_px = sep_px if sep_px is not None else int((bbox_out['x'][1] - bbox_out['x'][0]) * sep_factor)
                 x0 = bbox_out['x'][1] + sep_px
-            elif orient=='horizontal':
+            elif orient == 'horizontal':
                 sep_px = sep_px if sep_px is not None else int((bbox_out['y'][1] - bbox_out['y'][0]) * sep_factor)
                 y0 = bbox_out['y'][1] + sep_px
         return sep_px
+
 
 def test_latent_codeset(code_size=10):
     image_size_wh = (300, 600)
@@ -590,15 +590,17 @@ def test_latent_codeset(code_size=10):
     blankH[:] = bkg_color
     blankV[:] = bkg_color
     labels, codes = mkd_dataset(code_size=code_size)
-    subset = (0,1,3,5,8)
+    subset = (0, 1, 3, 5, 8)
+
     def _test_orient(orient, bbox, image):
 
         draw_bbox(image, bbox, thickness=1, inside=True, color=(128, 128, 128))
         ls = LatentCodeSet(test_codes=codes, test_labels=labels, digit_subset=[0, 1, 3, 8])
         thic, sep = ls.calc_size(code_size, bbox, orient=orient, equal_sizes=True, sep_factor=0.2)
-        print(thic,sep)
+        print(thic, sep)
         loc_xy = bbox['x'][0], bbox['y'][0]
-        ls.render(image, bbox, orient=orient,digit_subset=subset, same_scale=True, separation_px=sep, thicknesses_px=thic)
+        ls.render(image, bbox, orient=orient, digit_subset=subset,
+                  same_scale=True, separation_px=sep, thicknesses_px=thic)
         return image
 
     bboxH = {'x': (10, image_size_wh[0]-10), 'y': (10, image_size_wh[1]-10)}
@@ -612,6 +614,30 @@ def test_latent_codeset(code_size=10):
     ax[1].axis('off')
     plt.tight_layout()
     plt.show()
+
+
+# def resize_latent_codeset_test():
+
+class TestLatentCodsetResize(object):
+    """
+    Draw everything in a cv2 window that is resizable.  When the window changes size,
+    Re-shape the bounding boxes proportionately and start rendering w/the new size.
+    """
+
+    def __init__(self, width=200, height=700, n_codes=(4, 8, 16, 32, 64), win_size_wh=(1300, 750)):
+        self.win_name = "Resize Latent Codeset Test"
+        cv2.namedWindow(self.win_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(self.win_name, win_size_wh[0], win_size_wh[1])
+        # Create a blank image
+        self.image = np.zeros((height, width, 3), dtype=np.uint8)
+        # Define a bounding box
+        self.bbox = {'x': (50, 550), 'y': (100, 200)}
+        # Draw the bounding box on the image
+        draw_bbox(self.image, self.bbox, thickness=2, inside=True, color=(255, 0, 0))
+        # Show the image
+        cv2.imshow(self.win_name, self.image)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
 
 def draw_bbox(image, bbox, thickness=1, inside=True, color=(128, 128, 128)):

@@ -19,6 +19,7 @@ import json
 from experiment import AutoencoderExperiment
 WORKING_DIR = "VAE-results"
 
+
 class Encoder(nn.Module):
     def __init__(self, input_dim, hidden_dims, latent_dim, dropout_layer=None, dropout_rate=0.5):
         super().__init__()
@@ -47,7 +48,6 @@ class Encoder(nn.Module):
         return mu, log_var
 
 
-
 class Decoder(nn.Module):
     def __init__(self, latent_dim, hidden_dims, output_dim):
         super().__init__()
@@ -72,7 +72,7 @@ class VAE(nn.Module):
     def __init__(self, input_dim, enc_hidden_dims, dec_hidden_dims, latent_dim, output_dim, device, dropout_info=None, lambda_reg=0.001):
         super().__init__()
         d_l, d_r = (dropout_info['layer'], dropout_info['rate']) if dropout_info is not None else (None, None)
-        self.encoder = Encoder(input_dim, enc_hidden_dims, latent_dim,dropout_layer=d_l, dropout_rate=d_r)
+        self.encoder = Encoder(input_dim, enc_hidden_dims, latent_dim, dropout_layer=d_l, dropout_rate=d_r)
         self.decoder = Decoder(latent_dim, dec_hidden_dims, output_dim)
         self.latent_dim = latent_dim
         self.input_dim = input_dim
@@ -125,15 +125,11 @@ class VAE(nn.Module):
 
 
 class VAEExperiment(AutoencoderExperiment):
-    def __init__(self, dataset,pca_dims, enc_layers, d_latent, dec_layers=None, reg_lambda=0.001, batch_size=256,learn_rate=1e-3, dropout_info=None, **kwargs):
+    def __init__(self, dataset, pca_dims, enc_layers, d_latent, dec_layers=None, reg_lambda=0.001,
+                 batch_size=512, whiten_input=False, learn_rate=1e-3, dropout_info=None, **kwargs):
         self.device = torch.device(kwargs.get("device", "cpu"))
-        self.enc_layer_desc = enc_layers
 
-        self.dec_layer_desc = dec_layers
         self.dropout_info = dropout_info
-        self.batch_size = batch_size
-        self.code_size = d_latent
-        self.learn_rate = learn_rate
         self._stage = 0
         self._epoch = 0
         self.reg_lambda = reg_lambda
@@ -146,7 +142,8 @@ class VAEExperiment(AutoencoderExperiment):
 
         self._d_in = pca_dims
         self._d_out = 28*28
-        super().__init__(pca_dims=pca_dims,dataset=dataset, **kwargs)
+        super().__init__(dataset=dataset, pca_dims=pca_dims, enc_layers=enc_layers, dec_layers=dec_layers, d_latent=d_latent, batch_size=batch_size,
+                         whiten_input=whiten_input, learning_rate=learn_rate, **kwargs)
         self._history_dict = {
             'loss': [],
             'mse': [],
@@ -160,12 +157,14 @@ class VAEExperiment(AutoencoderExperiment):
         logging.info("Initialized VAEExperiment:  %s" % (self.get_name(),))
 
     def get_name(self, file_kind=None, suffix=None):
-        drop_str = "" if self.dropout_info is None else "_Drop(l=%i,r=%.2f)" % (self.dropout_info['layer'], self.dropout_info['rate'])
+        drop_str = "" if self.dropout_info is None else "_Drop(l=%i,r=%.2f)" % (
+            self.dropout_info['layer'], self.dropout_info['rate'])
         pca_str = self.pca.get_short_name()
         decoder_str = "_Decoder-%s" % "-".join(map(str, self.dec_layer_desc)) if self.dec_layer_desc is not None else ""
         encoder_str = "_Encoder-%s" % "-".join(map(str, self.enc_layer_desc))
 
-        root = ("%s_VAE-TORCH(%s%s%s%s_Dlatent=%i_RegLambda=%.3f)" %  (self.dataset,pca_str, encoder_str, drop_str, decoder_str, self.code_size, self.reg_lambda))
+        root = ("%s_VAE-TORCH(%s%s%s%s_Dlatent=%i_RegLambda=%.3f)" %
+                (self.dataset, pca_str, encoder_str, drop_str, decoder_str, self.code_size, self.reg_lambda))
         if suffix is not None:
             root = "%s_%s" % (root, suffix)
 
@@ -182,7 +181,8 @@ class VAEExperiment(AutoencoderExperiment):
     def from_filename(filename, dataset):
         filename = os.path.basename(filename)
         dataset = re.escape(dataset)
-        match = re.match(fr"{dataset}_VAE-TORCH\(pca=(\d+)_hidden=([\d\-]+)_d-latent=(\d+)_reg-lambda=(\d+\.\d+)\)", filename)
+        match = re.match(
+            fr"{dataset}_VAE-TORCH\(pca=(\d+)_hidden=([\d\-]+)_d-latent=(\d+)_reg-lambda=(\d+\.\d+)\)", filename)
         if not match:
             raise ValueError(f"Filename {filename} is not in the expected format.")
 
@@ -204,7 +204,7 @@ class VAEExperiment(AutoencoderExperiment):
                          dropout_info=self.dropout_info,
                          lambda_reg=self.reg_lambda).to(self.device)
 
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learn_rate)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
         self.print_model_architecture(self.model.encoder, self.model.decoder, self.model)
 
     def print_model_architecture(self, encoder, decoder, model):
@@ -241,7 +241,7 @@ class VAEExperiment(AutoencoderExperiment):
                 x_batch = x_batch.to(self.device)
                 y_batch = y_batch.to(self.device)
                 self.optimizer.zero_grad()
-                recon_y, mu, log_var = self.model(x_batch) 
+                recon_y, mu, log_var = self.model(x_batch)
                 loss, MSE, KLD = self.model.loss_function(recon_y, y_batch, mu, log_var, return_terms=True)
                 train_loss_terms['kld'].append(KLD.item())
                 train_loss_terms['mse'].append(MSE.item())
@@ -270,7 +270,7 @@ class VAEExperiment(AutoencoderExperiment):
             self._history_dict['val-mse'].append(np.mean(test_loss_terms['mse']))
             self._history_dict['val-kld'].append(np.mean(test_loss_terms['kld']))
             self._history_dict['lambda'].append(self.model.lambda_reg)
-            self._history_dict['learn_rate'].append(self.learn_rate)
+            self._history_dict['learn_rate'].append(self.learning_rate)
             print(f"Epoch {epoch+1}/{epochs} ({duration:.4f}s), " +
                   f"Training Loss: {avg_train_loss:.4f}," +
                   f"(MSE: {self._history_dict['mse'][-1]:.4f}, " +
@@ -280,7 +280,7 @@ class VAEExperiment(AutoencoderExperiment):
                   f"KLD: {self._history_dict['val-kld'][-1]:.4f})")
 
         self.save_weights()
-        
+
     def _attempt_resume(self):
         try:
             logging.info("Attempting to load pre-trained weights...")
@@ -305,10 +305,10 @@ class VAEExperiment(AutoencoderExperiment):
         with open(hist_filename, 'w') as f:
             json.dump(self._history_dict, f)
         logging.info("Saved model history to %s", hist_filename)
-        
+
     def load_weights(self, filename=None):
 
-        filename =  self.get_name(file_kind='weights') if filename is None else filename
+        filename = self.get_name(file_kind='weights') if filename is None else filename
         self.model.load_state_dict(torch.load(filename, map_location=self.device, weights_only=True))
         logging.info("Loaded model weights from %s", filename)
         hist_filename = self.get_name(file_kind='history')
@@ -350,7 +350,7 @@ class VAEExperiment(AutoencoderExperiment):
 
                 d_bbox = unit_dists.render(blank, bbox, orient='horizontal',
                                            centered=True, show_axis=False,
-                                           thicknesses=[t, t, t, t], 
+                                           thicknesses=[t, t, t, t],
                                            alphas=[.2, .5, .5, 1],
                                            digit_subset=digit_subset)[1]
 
@@ -399,6 +399,7 @@ class VAEExperiment(AutoencoderExperiment):
     def _plot_model(self):
         self._plot_encoding_errors(show_diffs=False)
         self._plot_encoding_errors(show_diffs=True)
+        
         self._plot_code_samples()
         self._plot_history()
         if not self._save_figs:
@@ -406,7 +407,7 @@ class VAEExperiment(AutoencoderExperiment):
 
     def _plot_history(self):
         height_ratios = [3, 3, 3, 1, 1]
-        fig, ax = plt.subplots(nrows=5, ncols=1, figsize=(8, 10),sharex=True,
+        fig, ax = plt.subplots(nrows=5, ncols=1, figsize=(8, 10), sharex=True,
                                gridspec_kw={'height_ratios': height_ratios})
         ax[0].plot(self._history_dict['loss'], label='Train Loss')
         ax[0].plot(self._history_dict['val-loss'], label='Validation Loss')
@@ -430,7 +431,7 @@ class VAEExperiment(AutoencoderExperiment):
         ax[3].set_title('lambda history', fontsize=12)
         ax[3].set_xlabel('Epoch', fontsize=10)
         ax[3].set_ylabel('lambda', fontsize=10)
-        
+
         # learning rate:
         ax[4].plot(self._history_dict['learn_rate'], label='Learning Rate')
         ax[4].set_title('Learning Rate history', fontsize=12)
@@ -441,12 +442,11 @@ class VAEExperiment(AutoencoderExperiment):
         for i in range(len(ax)-1):
             ax[i].set_xticklabels([])
             ax[i].grid(True)
-            
+
             ax[i].set_yscale('log')
 
         ax[3].grid(True)
         ax[3].set_yscale('log')
-
 
         plt.tight_layout()
         if self._save_figs:
@@ -464,7 +464,7 @@ class VAEExperiment(AutoencoderExperiment):
         drawn over a thick line spanning the interquartile range (IQR), and a dot representing the median.
         outliers are drawn as single pixels.
         """
-        digit_subset = [0,1, 3,5, 8]
+        digit_subset = [0, 1, 3, 5, 8]
 
         image_size_wh = 300, 600
         dist_width = 250
@@ -472,7 +472,7 @@ class VAEExperiment(AutoencoderExperiment):
         blank[:] = np.array(COLORS['OFF_WHITE_RGB'], dtype=np.uint8)
         codes = self._encoded_test
         value_span = np.min(codes), np.max(codes)
-        margin= 0.02*(value_span[1] - value_span[0])
+        margin = 0.02*(value_span[1] - value_span[0])
         value_span = (value_span[0] - margin, value_span[1] + margin)
         n_code_units = codes.shape[1]
         digit_labels = self.y_test
@@ -492,15 +492,15 @@ class VAEExperiment(AutoencoderExperiment):
         for unit, unit_dists in enumerate(unit_dists):
             bbox = {'x': (x, x + dist_width), 'y': (y, y + height)}
             bottom = bbox['y'][1]
-        
+
             loc = (bbox['x'][0], bbox['y'][0])
             scale = bbox['x'][1] - bbox['x'][0]
-            print(loc,scale)
+            print(loc, scale)
             d_bbox = unit_dists.render(blank, loc_xy=loc, scale=scale, orient='horizontal',
-                                        centered=False, show_axis=True,separation_px=1,
-                                        val_span=value_span,
-                                        thicknesses_px=[2,2,2,2], alphas=[.2, .5, .5, 1],
-                                        digit_subset=digit_subset,colors=colors)
+                                       centered=False, show_axis=True, separation_px=1,
+                                       val_span=value_span,
+                                       thicknesses_px=[2, 2, 2, 2], alphas=[.2, .5, .5, 1],
+                                       digit_subset=digit_subset, colors=colors)
 
             bottom = d_bbox['y'][1]
 
@@ -601,12 +601,8 @@ class VAEExperiment(AutoencoderExperiment):
 def vae_demo():
     args = VAEExperiment.get_args("Train a variational autoencoder on MNIST data.",
                                   extra_args=[
-                                      dict(name='--batch_size', type=int, default=256,
-                                           help="Batch size for training (Default 256)"),
                                       dict(name='--reg_lambda', type=float, default=0.01,
                                            help='Regularization parameter for VAE (default: 0.01)'),
-                                      dict(name='--d_latent', type=int, default=16,
-                                           help='Dimensionality of the latent space (default: 16)')
                                   ])
     logging.info("Running VAE with args: %s", args)
     ve = VAEExperiment(

@@ -24,12 +24,14 @@ class DenseExperiment(AutoencoderExperiment):
     def __init__(self,
                  enc_layers=(64,),
                  pca_dims=64,
-                 whiten_input=True,
+                 whiten_input=False,
                  dropout_info=None,
                  act_fns=None,
                  learning_rate=1e-3,
                  dec_layers=None,
                  dataset='digits',
+                 batch_size=512,
+                 d_latent=16,
                  **kwargs):
         """
         Initialize the Dense Experiment with a specified number of encoding units.
@@ -43,7 +45,6 @@ class DenseExperiment(AutoencoderExperiment):
         self.dropout = dropout_info
         self.enc_layer_desc = enc_layers
         self.dec_layer_desc = dec_layers
-        self.code_size = enc_layers[-1]
         self.act_fns = self._DEFAULT_ACT_FNS if act_fns is None else act_fns
         self._save_figs = None
 
@@ -55,19 +56,21 @@ class DenseExperiment(AutoencoderExperiment):
             self.act_fns['output'] = 'sigmoid'
         self._d_out = 784
 
-        super().__init__(pca_dims=pca_dims, whiten_input=whiten_input, learning_rate=learning_rate, dataset=dataset, **kwargs)
+        super().__init__(pca_dims=pca_dims, enc_layers=enc_layers, dec_layers=dec_layers, batch_size=batch_size, d_latent=d_latent,
+                         whiten_input=whiten_input, learning_rate=learning_rate, dataset=dataset, **kwargs)
 
         logging.info("Experiment initialized:  %s" % self.get_name())
         if isinstance(self.encoder, Model):
             self.print_model_architecture(self.encoder, self.decoder, self.autoencoder)
 
     def get_name(self, file_ext=None, suffix=None):
-        desc_str = "-".join([str(n) for n in self.enc_layer_desc])
-        dec_desc_str = "_dec-units="+"-".join([str(n) for n in self.dec_layer_desc]) if self.dec_layer_desc is not None else ""
+        desc_str = "-".join([str(n) for n in (self.enc_layer_desc+[self.code_size])])
+        dec_desc_str = "_dec-units="+"-".join([str(n) for n in self.dec_layer_desc]
+                                              ) if self.dec_layer_desc is not None else ""
         pca_str = self.pca.get_short_name()
         drop_str = "" if self.dropout is None else "_Drop(l=%i,r=%.2f)" % (self.dropout['layer'], self.dropout['rate'])
         fname = ("%s_Dense(%s_units=%s%s%s)" %
-                 (self.dataset,pca_str, desc_str, dec_desc_str, drop_str))
+                 (self.dataset, pca_str, desc_str, dec_desc_str, drop_str))
 
         if suffix is not None:
             fname = "%s_%s" % (fname, suffix)
@@ -86,15 +89,15 @@ class DenseExperiment(AutoencoderExperiment):
         return fname
 
     def _init_encoder_layers(self, inputs):
-
+        enc_layers_sizes = self.enc_layer_desc+[self.code_size]
         encoder_layers = []
-        for i, n_units in enumerate(self.enc_layer_desc):
+        for i, n_units in enumerate(enc_layers_sizes):
             if i == 0:
                 layer_input = inputs
             else:
                 layer_input = encoder_layers[-1]
 
-            act_fn = self.act_fns['internal'] if i < len(self.enc_layer_desc) - 1 else self.act_fns['encoding']
+            act_fn = self.act_fns['internal'] if i < len(enc_layers_sizes) - 1 else self.act_fns['encoding']
             layer = Dense(n_units, activation=act_fn, name=f'encoder_l{i}')(layer_input)
             encoder_layers.append(layer)
             if self.dropout is not None and i == self.dropout['layer']:
@@ -107,8 +110,9 @@ class DenseExperiment(AutoencoderExperiment):
 
     def _init_decoder_layers(self, encoding):
         decoder_layers = []
-        decoder_layer_desc = self.dec_layer_desc[:] if self.dec_layer_desc is not None else self.enc_layer_desc[:-1][::-1]
-        print("---------------------------> " ,decoder_layer_desc, self.dec_layer_desc)
+        decoder_layer_desc = self.dec_layer_desc[:
+                                                 ] if self.dec_layer_desc is not None else self.enc_layer_desc[:-1][::-1]
+        print("---------------------------> ", decoder_layer_desc, self.dec_layer_desc)
         decoder_layer_desc.append(self._d_out)  # add the input layer size for decoding
         for i, n_units in enumerate(decoder_layer_desc):
             if i == 0:
@@ -272,8 +276,8 @@ class DenseExperiment(AutoencoderExperiment):
         logging.info("\tMean squared error: %.4f (%.4f)", np.mean(self._mse_errors), np.std(self._mse_errors))
 
     def _plot_history(self):
-        
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True, gridspec_kw={'height_ratios': [4,1]})
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True, gridspec_kw={'height_ratios': [4, 1]})
 
         ax1.plot(self._history_dict['loss'])
         ax1.plot(self._history_dict['val_loss'])
@@ -403,15 +407,16 @@ class DenseExperiment(AutoencoderExperiment):
 def dense_demo():
     args = DenseExperiment.get_args("Train a dense autoencoder on MNIST data.")
     logging.info("Running Dense Autoencoder with args: %s", args)
-    
-    
+
     de = DenseExperiment(enc_layers=args.layers,
                          dec_layers=args.dec_layers,
                          pca_dims=args.pca_dims,
                          whiten_input=args.whiten,
                          learning_rate=args.learn_rate,
                          dropout_info=args.dropout,
-                         dataset=args.dataset)
+                         dataset=args.dataset,
+                         d_latent=args.d_latent,
+                         batch_size=args.batch_size)
 
     de.run_staged_experiment(n_stages=args.stages,
                              n_epochs=args.epochs,
