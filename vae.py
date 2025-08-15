@@ -17,7 +17,6 @@ from latent_var_plots import LatentDigitDist
 import time
 import json
 from experiment import AutoencoderExperiment
-WORKING_DIR = "VAE-results"
 
 
 class Encoder(nn.Module):
@@ -125,6 +124,8 @@ class VAE(nn.Module):
 
 
 class VAEExperiment(AutoencoderExperiment):
+    WORKING_DIR = "VAE-results"
+
     def __init__(self, dataset, pca_dims, enc_layers, d_latent, dec_layers=None, reg_lambda=0.001,
                  batch_size=512, whiten_input=False, learn_rate=1e-3, dropout_info=None, **kwargs):
         self.device = torch.device(kwargs.get("device", "cpu"))
@@ -163,17 +164,17 @@ class VAEExperiment(AutoencoderExperiment):
         decoder_str = "_Decoder-%s" % "-".join(map(str, self.dec_layer_desc)) if self.dec_layer_desc is not None else ""
         encoder_str = "_Encoder-%s" % "-".join(map(str, self.enc_layer_desc))
 
-        root = ("%s_VAE-TORCH(%s%s%s%s_Dlatent=%i_RegLambda=%.3f)" %
+        root = ("%s_VAE-TORCH(%s%s%s%s_Dlatent=%i_RegLambda=%.4f)" %
                 (self.dataset, pca_str, encoder_str, drop_str, decoder_str, self.code_size, self.reg_lambda))
         if suffix is not None:
             root = "%s_%s" % (root, suffix)
 
         if file_kind == 'weights':
-            return os.path.join(WORKING_DIR, root + ".weights")
+            return os.path.join(VAEExperiment.WORKING_DIR, root + ".weights")
         elif file_kind == 'image':
-            return os.path.join(WORKING_DIR, root + ".image.png")
+            return os.path.join(VAEExperiment.WORKING_DIR, root + ".image.png")
         elif file_kind == 'history':
-            return os.path.join(WORKING_DIR, root + ".history.pkl")
+            return os.path.join(VAEExperiment.WORKING_DIR, root + ".history.pkl")
 
         return root
 
@@ -316,58 +317,6 @@ class VAEExperiment(AutoencoderExperiment):
             self._history_dict.update(json.load(f))
         logging.info("Loaded model history from %s", hist_filename)
 
-    def _plot_code_samples(self, n_samp=39):
-        """
-        TODO: Sort the code units by how likely they are to be useful in the encoding.
-
-        For every code unit show a distribution of its activations given the digit.
-        These will be like narrow-box plots with a thin line spanning +/- 3 standard deviations,
-        drawn over a thick line spanning the interquartile range (IQR), and a dot representing the median.
-        outliers are drawn as single pixels.
-        """
-        image_size_wh = 300, 1200
-        dist_width = 250
-        blank = np.zeros((image_size_wh[1], image_size_wh[0], 3), dtype=np.uint8)
-        blank[:] = np.array(COLORS['OFF_WHITE_RGB'], dtype=np.uint8)
-        codes = self._encoded_test
-        n_code_units = codes.shape[1]
-        digit_labels = self.y_test
-
-        digit_subset = [1, 3, 8]
-        height, t, pad_y = 12, 3, 9  # calc_scale(None, n_code_units)
-        print(height, t, pad_y)
-
-        unit_dists = [LatentDigitDist(codes[:, code_unit], digit_labels)
-                      for code_unit in range(n_code_units)]
-        img = np.zeros((1000, 1000, 3), dtype=np.uint8)
-
-        x = 25
-        y = 10
-        for unit, unit_dists in enumerate(unit_dists):
-            bbox = {'x': (x, x + dist_width), 'y': (y, y + height)}
-            bottom = bbox['y'][1]
-            try:
-
-                d_bbox = unit_dists.render(blank, bbox, orient='horizontal',
-                                           centered=True, show_axis=False,
-                                           thicknesses=[t, t, t, t],
-                                           alphas=[.2, .5, .5, 1],
-                                           digit_subset=digit_subset)[1]
-
-                bottom = d_bbox['y'][1]
-
-                # draw_bbox(blank, d_bbox, thickness=1, inside=True, color=(256 - bkg_color))
-            except Exception as e:
-                # raise e
-                break
-
-            y = bottom + pad_y
-        fig, ax = plt.subplots(figsize=(5, 8))
-        ax.imshow(blank)
-        ax.axis('off')
-        plt.suptitle("Latent Variable Distributions for %i Code Units" % n_code_units, fontsize=14)
-        plt.tight_layout()
-
     def _eval(self):
         self._encoded_test = self.encode_samples(self.x_test)
         self._reconstructed_test = self.decode_samples(self._encoded_test)
@@ -383,8 +332,8 @@ class VAEExperiment(AutoencoderExperiment):
         logging.info("\tMean squared error: %.4f (%.4f)", np.mean(self._mse_errors), np.std(self._mse_errors))
 
     def run_staged_experiment(self, n_stages=5, n_epochs=25, save_figs=True):
-        if not os.path.exists(WORKING_DIR):
-            os.makedirs(WORKING_DIR)
+        if not os.path.exists(VAEExperiment.WORKING_DIR):
+            os.makedirs(VAEExperiment.WORKING_DIR)
 
         self._attempt_resume()
         self._save_figs = save_figs
@@ -466,7 +415,7 @@ class VAEExperiment(AutoencoderExperiment):
         """
         digit_subset = [0, 1, 3, 5, 8]
 
-        image_size_wh = 300, 600
+        image_size_wh = 300, 690
         dist_width = 250
         blank = np.zeros((image_size_wh[1], image_size_wh[0], 3), dtype=np.uint8)
         blank[:] = np.array(COLORS['OFF_WHITE_RGB'], dtype=np.uint8)
@@ -496,11 +445,15 @@ class VAEExperiment(AutoencoderExperiment):
             loc = (bbox['x'][0], bbox['y'][0])
             scale = bbox['x'][1] - bbox['x'][0]
             print(loc, scale)
-            d_bbox = unit_dists.render(blank, loc_xy=loc, scale=scale, orient='horizontal',
-                                       centered=False, show_axis=True, separation_px=1,
-                                       val_span=value_span,
-                                       thicknesses_px=[2, 2, 2, 2], alphas=[.2, .5, .5, 1],
-                                       digit_subset=digit_subset, colors=colors)
+            try:
+                d_bbox = unit_dists.render(blank, loc_xy=loc, scale=scale, orient='horizontal',
+                                        centered=False, show_axis=True, separation_px=1,
+                                        val_span=value_span,
+                                        thicknesses_px=[2, 2, 2, 2], alphas=[.2, .5, .5, 1],
+                                        digit_subset=digit_subset, colors=colors)
+            except:
+                logging.info("OUT OF SPACE!")
+                break
 
             bottom = d_bbox['y'][1]
 
@@ -513,11 +466,12 @@ class VAEExperiment(AutoencoderExperiment):
         plt.suptitle("Code unit distributions (black shows all units, color shows digits: %s)\n%s" % (
             ", ".join(str(d) for d in digit_subset), self.get_name()), fontsize=14)
 
-        suffix = "LatentDist_stage=%i" % (self._stage+1)
-        filename = self.get_name(file_kind='image', suffix=suffix)
-        # self._maybe_save_fig(fig, filename)
         if self._save_figs:
-            cv2.imwrite(filename, blank)
+            suffix = "LatentDist_stage=%i" % (self._stage+1)
+            filename = self.get_name(file_kind='image', suffix=suffix)
+            self._maybe_save_fig(fig, filename)
+        else:
+            plt.show()
 
     def _plot_encoding_errors(self, n_samp=39, show_diffs=False):
 

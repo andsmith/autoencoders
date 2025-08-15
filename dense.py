@@ -14,12 +14,12 @@ import json
 from experiment import AutoencoderExperiment
 import re
 
-WORKING_DIR = "Dense-results"
-
 
 class DenseExperiment(AutoencoderExperiment):
     _DEFAULT_ACT_FNS = {'internal': 'relu',
                         'encoding': 'relu'}
+
+    WORKING_DIR = "Dense-results"
 
     def __init__(self,
                  enc_layers=(64,),
@@ -85,7 +85,7 @@ class DenseExperiment(AutoencoderExperiment):
             raise ValueError("Unknown file extension type: %s" % file_ext)
 
         if file_ext is not None:
-            return os.path.join(WORKING_DIR, fname)
+            return os.path.join(DenseExperiment.WORKING_DIR, fname)
         return fname
 
     def _init_encoder_layers(self, inputs):
@@ -384,8 +384,8 @@ class DenseExperiment(AutoencoderExperiment):
         :param save_figs: If True, saves plots to files instead of showing them interactively.
         """
 
-        if not os.path.exists(WORKING_DIR):
-            os.makedirs(WORKING_DIR)
+        if not os.path.exists(DenseExperiment.WORKING_DIR):
+            os.makedirs(DenseExperiment.WORKING_DIR)
 
         # first round, load weights if available
         self._attempt_resume()
