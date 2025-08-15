@@ -6,8 +6,6 @@ from util import make_test_data
 import logging
 import pickle
 
-WORKING_DIR = "PCA"
-
 
 class PCA(object):
 
@@ -22,29 +20,142 @@ class PCA(object):
         self._dims_param = dims
         self.whiten = whiten
         self._n_train = None
-        self.pca_dims = None if dims > 0 else 784
+        self.pca_dims = None if dims > 0 else 0
+        self.d_in = None
+        self.d_out = None
         self.components = None
         self.scales = None
         self.means = None
+        self.variance_explained = None
+
+    def get_name(self):
+        w_str = "UW" if not self.whiten else "W"
+
+        if self.d_out is None:
+            if self.pca_dims == 0:
+                return "NOPCA(%i, %s)" % (self.d_in, w_str)
+            return "PCA(uninitialized)"
+        if self.pca_dims == 0:
+            return "NOPCA(%i, %s)" % (self.d_in, w_str)
+        return "PCA(%i --> %i, %s)" % (self.d_in, self.d_out, w_str)
+
+    def encode(self, points):
+        codes = points - self.means
+        if self.pca_dims == 0:
+            codes = codes / self.scales if self.whiten else codes
+        else:
+            codes = codes @ self.components
+            codes = codes / self.scales if self.whiten else codes
+        return codes
+
+    def decode(self, codes):
+
+        if self.pca_dims == 0:
+            points = (codes * self.scales if self.whiten else codes)
+        else:
+            # TODO:  Unwhiten after!
+            points = codes * self.scales if self.whiten else codes
+            points = points @ self.components.T
+
+        return points + self.means
+
+    def fit_transform(self, points):
+        self.d_in = points.shape[1]
+        self._n_train = points.shape[0]
+        self._d_input = points.shape[1]
+        if self._d_input < self._dims_param:
+            raise ValueError("PCA dimensions (%i) cannot be greater than input dimensions (%i)." %
+                             (self._dims_param, self._d_input))
+
+        logging.info("PCA(dims=%s, whiten=%s) training ...", self._dims_param, self.whiten)
+        self.means = np.mean(points, axis=0)
+        if self.pca_dims == 0:
+            self.d_out = self.d_in
+            self.scales = np.std(points, axis=0)
+            return self.encode(points)
+
+        # using SVD:
+        U, s, Vh = np.linalg.svd((points - self.means), full_matrices=False)
+        principal_components = Vh
+        eigvals = (s**2) / (points.shape[0] - 1)  # Using N-1 for sample variance
+        total_variance = np.sum(eigvals)
+        var_sum = np.cumsum(eigvals)/total_variance
+
+        if self._dims_param >= 1:
+
+            self.pca_dims = self._dims_param
+            self.d_out = self.pca_dims
+            current_variance = var_sum[self.pca_dims]
+
+        elif 0 < self._dims_param < 1:
+            # Keep enough components to explain the desired variance
+
+            ind = np.where(var_sum >= self._dims_param)[0]
+            if ind.size > 0:
+                current_variance = var_sum[ind[0]]
+                self.pca_dims = ind[0] + 1
+                self.d_out = self.pca_dims
+            else:
+                raise ValueError("PCA dimensions could not be determined, degenerate data?")
+
+        self.d_out = self.pca_dims
+        self.components = principal_components[:self.pca_dims, :].T
+        self.scales = eigvals[:self.pca_dims] ** 0.5
+
+        # Project the data onto the selected eigenvectors
+        encoded = self.encode(points)
+
+        self.variance_explained = current_variance
+
+        logging.info("\tPCA training complete....")
+        logging.info("\t\tPCA dims: %i,", self.pca_dims)
+        logging.info("\t\tCaptured %.3f of the variance,", 100 * self.variance_explained)
+
+        return encoded
+
+
+class MNISTPCA(PCA):
+    _WORKING_DIR = "PCA"
+
+    def __init__(self, dataset, *args, **kwargs):
+        self.dataset = dataset
+        if dataset not in ['digits', 'fashion']:
+            raise ValueError("Unknown dataset: %s" % dataset)
+        super().__init__(*args, **kwargs)
         logging.info("%s initialized.", self.get_name())
+
+    def fit_transform(self, points, use_cache=False):
+
+        if use_cache:
+            if 0 < self._dims_param < 1:
+                raise ValueError("Can't use cache when deciding pca-dim by variance fraction.")
+            if self._load_cache(self._dims_param):
+                return self.encode(points)
+
+        transformed = super().fit_transform(points)
+
+        if use_cache:
+            self._write_cache(clobber=True)
+
+        return transformed
 
     def get_name(self, n_train=None, n_dims=None):
         nt = self._n_train if n_train is None else n_train
-        nt = "(untrained)" if nt is None else "%i"%nt
-        nd = n_dims if n_dims is not None else self.pca_dims
-        return "PCA(dim=%s_whiten=%s_n-train=%s)" % (nd, "T" if self.whiten else "F", nt)
+        nt = "(untrained)" if nt is None else "%i" % nt
+        nd = n_dims if n_dims is not None else self.d_out
+        return "%s_PCA(dim=%s_whiten=%s_n-train=%s)" % (self.dataset, nd, "T" if self.whiten else "F", nt)
 
     def get_short_name(self):
-        return "PCA(%s,%s)" % (self.pca_dims, ("W" if self.whiten else "UW"))
+        return "%s-PCA(%s,%s)" % (self.dataset, self.d_out, ("W" if self.whiten else "UW"))
 
     def _cache_name(self, n_train, n_dims):
         file = self.get_name(n_train, n_dims) + ".pkl"
-        return os.path.join(WORKING_DIR, file)
+        return os.path.join(self._WORKING_DIR, file)
 
     def _write_cache(self, clobber=False):
-        if not os.path.exists(WORKING_DIR):
-            os.makedirs(WORKING_DIR)
-        filename = self._cache_name(self._n_train, n_dims=self.pca_dims)
+        if not os.path.exists(self._WORKING_DIR):
+            os.makedirs(self._WORKING_DIR)
+        filename = self._cache_name(self._n_train, n_dims=self.d_out)
         if os.path.exists(filename) and not clobber:
             raise ValueError("Cache file %s already exists. Use clobber=True to overwrite.", filename)
         with open(filename, 'wb') as f:
@@ -62,94 +173,12 @@ class PCA(object):
         self.__dict__.update(pca.__dict__)
         return True
 
-    def encode(self, points):
-        codes = points - self.means
-        if self.pca_dims == 0:
-            codes = codes / self.scales if self.whiten else codes
-        else:
-            codes = codes @ self.components
-            codes = codes / self.scales if self.whiten else codes
-        return codes
-
-    def decode(self, codes):
-
-        if self.pca_dims == 0:
-            points = (codes * self.scales if self.whiten else codes)
-        else:
-            points = codes * self.scales if self.whiten else codes
-            points = points @ self.components.T
-
-        return points + self.means
-
-    def fit_transform(self, points):
-        use_cache=False
-        self._n_train = points.shape[0]
-        self._d_input = points.shape[1]
-        if self._d_input < self._dims_param:
-            raise ValueError("PCA dimensions (%i) cannot be greater than input dimensions (%i)." % (self._dims_param, self._d_input))
-
-        if use_cache:
-            if 0 < self._dims_param < 1:
-                raise ValueError("Can't use cache when deciding pca-dim by variance fraction.")
-            n_dims = self._dims_param if self._dims_param != 0 else 784
-
-            if self._load_cache(n_dims):
-                return self.encode(points)
-
-        logging.info("PCA(dims=%s, whiten=%s) training ...", self._dims_param, self.whiten)
-        self.means = np.mean(points, axis=0)
-        if self._dims_param == 0:
-            self.pca_dims = 0  # no pca, just the data
-            self.scales = np.std(points, axis=0)
-            return self.encode(points)
-
-        # using SVD:
-        U, s, Vh = np.linalg.svd((points - self.means), full_matrices=False)
-        principal_components = Vh
-        eigvals = (s**2) / (points.shape[0] - 1) # Using N-1 for sample variance
-        total_variance = np.sum(eigvals)
-        var_sum = np.cumsum(eigvals)/total_variance
-
-        if self._dims_param >= 1:
-
-            self.pca_dims = self._dims_param
-            current_variance = var_sum[self.pca_dims]
-
-        elif 0 < self._dims_param < 1:
-            # Keep enough components to explain the desired variance
-
-            ind = np.where(var_sum >= self._dims_param)[0]
-            if ind.size > 0:
-                current_variance = var_sum[ind[0]]
-                self.pca_dims = ind[0] + 1
-            else:
-                raise ValueError("PCA dimensions could not be determined, degenerate data?")
-            
-
-
-        self.components = principal_components[:self.pca_dims, :].T
-        self.scales = eigvals[:self.pca_dims]  ** 0.5
-
-        # Project the data onto the selected eigenvectors
-        encoded = self.encode(points)
-
-        self.variance_explained = current_variance
-
-        logging.info("\tPCA training complete....")
-        logging.info("\t\tPCA dims: %i,", self.pca_dims)
-        logging.info("\t\tCaptured %.3f of the variance,", 100 * self.variance_explained)
-
-        if use_cache:
-            self._write_cache(clobber=True)
-
-        return encoded
-
 
 def _test_pca_modes(pca, data, labels, plot):
     codes = pca.fit_transform(data)
     decodes = pca.decode(codes)
-    bbox={'x': np.array([np.min(codes[:, 0]), np.max(codes[:, 0])]), 
-          'y': np.array([np.min(codes[:, 1]), np.max(codes[:, 1])])}
+    bbox = {'x': np.array([np.min(codes[:, 0]), np.max(codes[:, 0])]),
+            'y': np.array([np.min(codes[:, 1]), np.max(codes[:, 1])])}
 
     if plot:
         fig, ax = plt.subplots(1, 3, figsize=(9, 4))
@@ -159,15 +188,15 @@ def _test_pca_modes(pca, data, labels, plot):
             ax.scatter(points[:, 0], points[:, 1], s=1, c=labels, alpha=0.5)
             ax.set_title(title)
             return bbox
-
-        _show_data(data, "Original Data", ax[0])
-        _show_data(codes, "Encoded Data", ax[1])
-        _show_data(decodes, "Decoded Data", ax[2])
-
+        mse = np.mean((data - decodes) ** 2)
+        _show_data(data, "Original Data (1st 2 of %i dims)" % (data.shape[1],), ax[0])
+        _show_data(codes, "Encoded Data (1st 2 of %i dims)" % (codes.shape[1],), ax[1])
+        _show_data(decodes, "Decoded Data, mse:  %.4f" % mse, ax[2])
 
         plt.suptitle(pca.get_name())
         plt.tight_layout()
     return bbox
+
 
 def test_pca_modes(plot=False):
     # cov = np.array([[1, 0.1], [0.1, .02]])
@@ -182,40 +211,44 @@ def test_pca_modes(plot=False):
         else max(abs(x)) should be > 200 and max(abs(y)) > 20
         """
         if whiten:
-            assert np.max(np.abs(bbox['x'])) < 6, "Bounding box should have been within x,y~[-6,6], but got bbox:  %s" % bbox
-            assert np.max(np.abs(bbox['y'])) < 6, "Bounding box should have been within x,y~[-6,6], but got bbox:  %s" % bbox
+            assert np.max(np.abs(bbox['x'])
+                          ) < 6, "Bounding box should have been within x,y~[-6,6], but got bbox:  %s" % bbox
+            assert np.max(np.abs(bbox['y'])
+                          ) < 6, "Bounding box should have been within x,y~[-6,6], but got bbox:  %s" % bbox
         else:
-            assert max(abs(bbox['x'])) > 60, "Bounding box should have been outside x,y~[-200,200], but got bbox:  %s" % bbox
+            assert max(abs(bbox['x'])
+                       ) > 60, "Bounding box should have been outside x,y~[-200,200], but got bbox:  %s" % bbox
             assert max(abs(bbox['y'])) > 10, "Bounding box should have been outside x,y~[-20,20], but got bbox:  %s" % bbox
 
-    check(_test_pca_modes(PCA(dims=0), data, labels,plot=plot), whiten=True)
-    check(_test_pca_modes(PCA(dims=0, whiten=False), data, labels,plot=plot), whiten=False)
-    check(_test_pca_modes(PCA(dims=3, whiten=True), data, labels,plot=plot), whiten=True)
-    check(_test_pca_modes(PCA(dims=7, whiten=False), data, labels,plot=plot), whiten=False)
-    check(_test_pca_modes(PCA(dims=.95, whiten=True), data, labels,plot=plot), whiten=True)
-    check(_test_pca_modes(PCA(dims=.95, whiten=False), data, labels,plot=plot), whiten=False)
+    check(_test_pca_modes(PCA(dims=0, whiten=True), data, labels, plot=plot), whiten=True)
+    check(_test_pca_modes(PCA(dims=0, whiten=False), data, labels, plot=plot), whiten=False)
+    check(_test_pca_modes(PCA(dims=3, whiten=True), data, labels, plot=plot), whiten=True)
+    check(_test_pca_modes(PCA(dims=7, whiten=False), data, labels, plot=plot), whiten=False)
+    check(_test_pca_modes(PCA(dims=.95, whiten=True), data, labels, plot=plot), whiten=True)
+    check(_test_pca_modes(PCA(dims=.95, whiten=False), data, labels, plot=plot), whiten=False)
 
     plt.show()
 
 
 def test_pca_layer(plot=False):
     d = 100
-    data, labels = make_test_data(d, 5000, n_clusters=5, separability=1.0)
+    n_clusters=5
+    data, labels = make_test_data(d, 5000, n_clusters=n_clusters, separability=1.0)
     pca = PCA(dims=5)
     reduced_data = pca.fit_transform(data)
     if plot:
         fig, ax = plt.subplots(1, 2, figsize=(8, 5))
-        ax[0].scatter(reduced_data[:, 0], reduced_data[:, 1], c=labels, s=2)
-        ax[0].set_title("PCA-reduced data")
-        ax[1].scatter(data[:, 0], data[:, 1], c=labels)
-        ax[1].set_title("Original data (first 2 of %i dims)" % (d,))
-        plt.suptitle(pca.get_name())
+        ax[0].scatter(data[:, 0], data[:, 1], c=labels,s=2)
+        ax[0].set_title("Original data (first 2 of %i dims)" % (d,))
+        ax[1].scatter(reduced_data[:, 0], reduced_data[:, 1], c=labels, s=2)
+        ax[1].set_title("PCA-reduced data (first 2 of %i dims)" % (reduced_data.shape[1],))
+        plt.suptitle(pca.get_name()+"\nData:  %i clusters, %i samples" % (n_clusters, data.shape[0]))
         plt.tight_layout()
         plt.show()
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    test_pca_layer()
-    test_pca_modes()
+    test_pca_layer(True)
+    test_pca_modes(True)
     logging.info("PCA tests completed successfully.")

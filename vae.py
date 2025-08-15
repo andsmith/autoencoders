@@ -11,7 +11,7 @@ import os
 import logging
 import re
 from matplotlib.gridspec import GridSpec
-from colors import COLORS
+from colors import COLORS, MPL_CYCLE_COLORS
 from img_util import make_digit_mosaic, make_img, diff_img
 from latent_var_plots import LatentDigitDist
 import time
@@ -334,15 +334,10 @@ class VAEExperiment(AutoencoderExperiment):
         digit_labels = self.y_test
 
         digit_subset = [1, 3, 8]
-        colors = [COLORS['MPL_BLUE_RGB'],
-                  COLORS['MPL_ORANGE_RGB'],
-                  COLORS['MPL_GREEN_RGB']]
-
-        colors = [np.array(c) for c in colors]
         height, t, pad_y = 12, 3, 9  # calc_scale(None, n_code_units)
         print(height, t, pad_y)
 
-        unit_dists = [LatentDigitDist(codes[:, code_unit], digit_labels, colors=colors)
+        unit_dists = [LatentDigitDist(codes[:, code_unit], digit_labels)
                       for code_unit in range(n_code_units)]
         img = np.zeros((1000, 1000, 3), dtype=np.uint8)
 
@@ -355,8 +350,8 @@ class VAEExperiment(AutoencoderExperiment):
 
                 d_bbox = unit_dists.render(blank, bbox, orient='horizontal',
                                            centered=True, show_axis=False,
-                                           thicknesses=[
-                                               t, t, t], alphas=[.2, .5, .5, 1],
+                                           thicknesses=[t, t, t, t], 
+                                           alphas=[.2, .5, .5, 1],
                                            digit_subset=digit_subset)[1]
 
                 bottom = d_bbox['y'][1]
@@ -469,25 +464,26 @@ class VAEExperiment(AutoencoderExperiment):
         drawn over a thick line spanning the interquartile range (IQR), and a dot representing the median.
         outliers are drawn as single pixels.
         """
-        digit_subset = [1, 3, 8]
+        digit_subset = [0,1, 3,5, 8]
 
-        image_size_wh = 300, 1200
+        image_size_wh = 300, 600
         dist_width = 250
         blank = np.zeros((image_size_wh[1], image_size_wh[0], 3), dtype=np.uint8)
         blank[:] = np.array(COLORS['OFF_WHITE_RGB'], dtype=np.uint8)
         codes = self._encoded_test
+        value_span = np.min(codes), np.max(codes)
+        margin= 0.02*(value_span[1] - value_span[0])
+        value_span = (value_span[0] - margin, value_span[1] + margin)
         n_code_units = codes.shape[1]
         digit_labels = self.y_test
 
-        colors = [COLORS['MPL_BLUE_RGB'],
-                  COLORS['MPL_ORANGE_RGB'],
-                  COLORS['MPL_GREEN_RGB']]
+        colors = MPL_CYCLE_COLORS
 
         colors = [np.array(c) for c in colors]
         height, t, pad_y = 12, 3, 9  # calc_scale(None, n_code_units)
         print(height, t, pad_y)
 
-        unit_dists = [LatentDigitDist(codes[:, code_unit], digit_labels, colors=colors)
+        unit_dists = [LatentDigitDist(codes[:, code_unit], digit_labels)
                       for code_unit in range(n_code_units)]
         img = np.zeros((1000, 1000, 3), dtype=np.uint8)
 
@@ -496,20 +492,19 @@ class VAEExperiment(AutoencoderExperiment):
         for unit, unit_dists in enumerate(unit_dists):
             bbox = {'x': (x, x + dist_width), 'y': (y, y + height)}
             bottom = bbox['y'][1]
-            try:
+        
+            loc = (bbox['x'][0], bbox['y'][0])
+            scale = bbox['x'][1] - bbox['x'][0]
+            print(loc,scale)
+            d_bbox = unit_dists.render(blank, loc_xy=loc, scale=scale, orient='horizontal',
+                                        centered=False, show_axis=True,separation_px=1,
+                                        val_span=value_span,
+                                        thicknesses_px=[2,2,2,2], alphas=[.2, .5, .5, 1],
+                                        digit_subset=digit_subset,colors=colors)
 
-                d_bbox = unit_dists.render(blank, bbox, orient='horizontal',
-                                           centered=True, show_axis=False,
-                                           thicknesses=[
-                                               t, t, t], alphas=[.2, .5, .5, 1],
-                                           digit_subset=digit_subset)[1]
+            bottom = d_bbox['y'][1]
 
-                bottom = d_bbox['y'][1]
-
-                # draw_bbox(blank, d_bbox, thickness=1, inside=True, color=(256 - bkg_color))
-            except Exception as e:
-                # raise e
-                break
+            # draw_bbox(blank, d_bbox, thickness=1, inside=True, color=(256 - bkg_color))
 
             y = bottom + pad_y
         fig, ax = plt.subplots(figsize=(5, 8))

@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 import matplotlib.pyplot as plt
 from argparse import ArgumentParser
-from pca import PCA
+from pca import MNISTPCA as PCA
 
 from mnist import MNISTData, FashionMNISTData
 import logging
@@ -16,7 +16,8 @@ class AutoencoderExperiment(ABC):
     Base class for autoencoder experiments.
     """
 
-    def __init__(self,dataset, pca_dims, whiten_input=False, n_train_samples=0, bw_images=False, use_pca_cache=False, learning_rate=1e-3):
+    def __init__(self, dataset, pca_dims, whiten_input=False, n_train_samples=0,
+                 bw_images=False,  learning_rate=1e-3):
         """
         Initialize the AutoencoderExperiment.
         :param pca_dims:
@@ -30,12 +31,12 @@ class AutoencoderExperiment(ABC):
         self.dataset = dataset
         self.whiten_input = whiten_input
         self.learning_rate = learning_rate
-        self._use_pca_cache = use_pca_cache
-        self.pca = PCA(dims=pca_dims, whiten=whiten_input)
+        self.pca = PCA(dims=pca_dims, whiten=whiten_input,dataset=dataset)
 
         self.n_train_samples = n_train_samples
+
         self.pca_dims = self._load_data(binarize=bw_images)
-        self._d_in = self.pca.pca_dims  # after loading data
+        self._d_in = self.pca.d_out  # after loading data
         self._d_out = 784
 
         self._history_dict = {
@@ -127,14 +128,11 @@ class AutoencoderExperiment(ABC):
         """
         pass
 
-
-
     def _accumulate_history(self, more_history):
         for key in more_history.keys():
             if key not in self._history_dict:
                 self._history_dict[key] = []
             self._history_dict[key].extend(more_history[key])
-
 
     @staticmethod
     def get_args(description=None, extra_args=()):
@@ -215,7 +213,7 @@ class AutoencoderExperiment(ABC):
         self.x_test_pca = self.pca.encode(self.x_test)
 
         logging.info("Data loaded: %i training samples, %i test samples", self.x_train.shape[0], self.x_test.shape[0])
-        return self.pca.pca_dims
+        return self.pca.d_out
 
     def _maybe_save_fig(self, fig, filename):
         if self._save_figs:

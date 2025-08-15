@@ -403,7 +403,8 @@ class DenseExperiment(AutoencoderExperiment):
 def dense_demo():
     args = DenseExperiment.get_args("Train a dense autoencoder on MNIST data.")
     logging.info("Running Dense Autoencoder with args: %s", args)
-
+    
+    
     de = DenseExperiment(enc_layers=args.layers,
                          dec_layers=args.dec_layers,
                          pca_dims=args.pca_dims,

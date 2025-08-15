@@ -87,3 +87,11 @@ Zooming in to the interesting region shows encodings of the same digits are simi
 With the `L1` and `L1-squared` loss functions on binary units (tanh + binary/Heaviside pass-through layers at the end of the encoding stage), the training process pressures the network to find code words with fewer active bits.
 
 With the `entropy` and `entropy-squared` loss functions (using real-valued/sigmoid units for the code layer),  
+
+
+##### File notes
+
+* `pca.py` - unit tests / plot tests
+* `pca_digits.py` - reconstruction loss of mnist (generates figures)
+* `test_embeddings.py` plot tests
+* `embed.py` - Generate an embedding from a model's latent representation of MNIST, make a PNG of it, save it.  ALso generate figures for raw PCA(2)

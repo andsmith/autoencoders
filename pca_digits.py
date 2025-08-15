@@ -1,4 +1,4 @@
-from pca import PCA
+from pca import MNISTPCA as PCA
 from tests import load_mnist
 import numpy as np
 import matplotlib.pyplot as plt
@@ -7,7 +7,8 @@ from colors import COLORS
 import logging
 import cv2
 
-def _generate(images, samples, grid_shape, d=None, var_frac=None, orient='vertical'):
+
+def _generate(images, samples, grid_shape, d=None, var_frac=None, orient='vertical', dataset='digits'):
     """
     :param images: The input images.
     :param labels: The labels corresponding to the images.
@@ -18,11 +19,11 @@ def _generate(images, samples, grid_shape, d=None, var_frac=None, orient='vertic
     :param orient: Are images ordered across rows first (horizontal) or columns first (vertical)?
     """
     if d is not None:
-        pca = PCA(dims=d, whiten=True)
+        pca = PCA(dims=d, dataset=dataset)
     elif var_frac is not None:
-        pca = PCA(dims=var_frac, whiten=True)
+        pca = PCA(dims=var_frac, dataset=dataset)
     else:
-        pca = None
+        pca = PCA(dims=0, dataset=dataset)
 
     if pca is None:
         decoded_sample_images = [images[s].reshape(28, 28) for s in samples]
@@ -47,7 +48,6 @@ def _generate(images, samples, grid_shape, d=None, var_frac=None, orient='vertic
         out_img[row*28:(row+1)*28, col*28:(col+1)*28] = np.clip(img, 0, 1)
 
     return out_img, title_parts
-
 
 
 def _draw_img_data(img_data_list, title):
@@ -124,7 +124,6 @@ def draw_pca_maps(images, labels, dataset='Digits'):
     var_grid = [None, 0.1, 0.25,
                 0.33, 0.5, 0.75,
                 0.90, 0.95, 0.99]
-    
 
     sample_grid_shape = [15, 10]
     n_samples = np.prod(sample_grid_shape)
@@ -156,28 +155,32 @@ def show_low_dim_results():
     # Show "reconstructions" evenly interpolated across 1 and 2-d PCA representations.
     pass
 
+
 def _make_comp_img(components, grid_shape, magnification, max_z=3.75):
     """
     First arange all components in reverse order in the specified grid shape.
     Then normalize/scale and magnify.
     """
     # Arrange components in the specified grid shape
-    float_img = np.zeros((grid_shape[0] * 28 , grid_shape[1] * 28 ), dtype=np.float32)
+    float_img = np.zeros((grid_shape[0] * 28, grid_shape[1] * 28), dtype=np.float32)
     for i in range(components.shape[1]):
         row = i // grid_shape[1]
         col = i % grid_shape[1]
-        x_left = col * 28 
-        y_top = row * 28 
+        x_left = col * 28
+        y_top = row * 28
         comp_img = components[:, i].reshape(28, 28)
 
         float_img[y_top:y_top + 28, x_left:x_left + 28] = comp_img
-    z_image = (float_img-np.mean(float_img))/ np.std(float_img)
+    z_image = (float_img-np.mean(float_img)) / np.std(float_img)
     float_img = np.clip(z_image/max_z, -1, 1)/2 + 0.5
     float_img = (float_img*255).astype(np.uint8)
     new_size = (float_img.shape[1] * magnification, float_img.shape[0] * magnification)
     return cv2.resize(float_img, new_size, interpolation=cv2.INTER_CUBIC)
 
+
 def show_components(images, labels, dataset='Digits'):
+    import ipdb
+    ipdb.set_trace()
     # Show a representation of the components.
     grid_shape = (10, 15)  # rows, cols of examples to show
     mag_factor = 5
@@ -189,9 +192,10 @@ def show_components(images, labels, dataset='Digits'):
     comps = pca.components
     image = _make_comp_img(comps, grid_shape, mag_factor)
     cv2.imwrite("PCA-%s_Components.png" % dataset, image)
-    cv2.imshow( "PCA Components", image)
+    cv2.imshow("PCA Components", image)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
+
 
 def make_figs():
     _, (images, labels) = load_mnist()
