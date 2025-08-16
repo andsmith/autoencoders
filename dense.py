@@ -443,7 +443,7 @@ class DenseExperiment(AutoencoderExperiment):
 
 
 def dense_demo():
-    args = DenseExperiment.get_args("Train a dense autoencoder on MNIST data.")
+    args = DenseExperiment.get_args("Train a dense autoencoder on MNIST data.", layers_default=[])
     logging.info("Running Dense Autoencoder with args: %s", args)
 
     de = DenseExperiment(enc_layers=args.layers,

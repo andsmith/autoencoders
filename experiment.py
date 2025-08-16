@@ -17,7 +17,7 @@ class AutoencoderExperiment(ABC):
     """
 
     def __init__(self, dataset, pca_dims, enc_layers, dec_layers=None, whiten_input=False, n_train_samples=0,
-                 bw_images=False, d_latent=16, batch_size=512,  learning_rate=1e-3):
+                 bw_images=True, d_latent=16, batch_size=512,  learning_rate=1e-3):
         """
         Initialize the AutoencoderExperiment.
         :param pca_dims:
@@ -147,7 +147,7 @@ class AutoencoderExperiment(ABC):
             self._history_dict[key].extend(more_history[key])
 
     @staticmethod
-    def get_args(description=None, extra_args=()):
+    def get_args(description=None, extra_args=(), layers_default = [64]):
         """
         Syntax:  python dense.py --layers 512 128 64 --epochs 25 --stages 10 --no_plot
         this creates a dense autoencoder with encoding layers that have 512, 
@@ -170,8 +170,8 @@ class AutoencoderExperiment(ABC):
                             help='Dimensionality of the latent space (default: 16)')
         parser.add_argument('--dropout_rate', type=float, default=0.0,
                             help='Dropout rate to apply after each dense layer (default: 0.0)')
-        parser.add_argument('--layers', type=int, nargs='+', default=[64],
-                            help='List of encoder layer sizes (default: [64])')
+        parser.add_argument('--layers', type=int, nargs='+', default=layers_default,
+                            help='List of encoder layer sizes (default, %i layers: %s)' % (len(layers_default), layers_default))
         parser.add_argument('--epochs', type=int, default=25,
                             help='Number of epochs to train each stage (default: 25)')
         parser.add_argument('--stages', type=int, default=1,
