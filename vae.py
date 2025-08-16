@@ -128,7 +128,7 @@ class VAE(nn.Module):
 class VAEExperiment(AutoencoderExperiment):
     WORKING_DIR = "VAE-results"
 
-    def __init__(self, dataset, pca_dims, enc_layers, d_latent, dec_layers=None, reg_lambda=0.001,
+    def __init__(self, dataset, pca_dims, enc_layers, d_latent, dec_layers=None, reg_lambda=0.001, binary_input=False,
                  batch_size=512, whiten_input=False, learn_rate=1e-3, dropout_info=None, **kwargs):
         self.device = torch.device(kwargs.get("device", "cpu"))
 
@@ -146,7 +146,7 @@ class VAEExperiment(AutoencoderExperiment):
         self._d_in = pca_dims
         self._d_out = 28*28
         super().__init__(dataset=dataset, pca_dims=pca_dims, enc_layers=enc_layers, dec_layers=dec_layers, d_latent=d_latent, batch_size=batch_size,
-                         whiten_input=whiten_input, learning_rate=learn_rate, **kwargs)
+                         whiten_input=whiten_input, learning_rate=learn_rate,binary_input=binary_input, **kwargs)
         self._history_dict = {
             'loss': [],
             'mse': [],
@@ -165,9 +165,9 @@ class VAEExperiment(AutoencoderExperiment):
         pca_str = self.pca.get_short_name()
         decoder_str = "_Decoder-%s" % "-".join(map(str, self.dec_layer_desc)) if self.dec_layer_desc is not None else ""
         encoder_str = "_Encoder-%s" % "-".join(map(str, self.enc_layer_desc))
-
+        dataset_str = "%s%s" % (self.dataset, "-BIN" if self.binary_input else "")
         root = ("%s_VAE-TORCH(%s%s%s%s_Dlatent=%i_RegLambda=%.4f)" %
-                (self.dataset, pca_str, encoder_str, drop_str, decoder_str, self.code_size, self.reg_lambda))
+                (dataset_str, pca_str, encoder_str, drop_str, decoder_str, self.code_size, self.reg_lambda))
         if suffix is not None:
             root = "%s_%s" % (root, suffix)
 
@@ -566,6 +566,7 @@ def vae_demo():
         reg_lambda=args.reg_lambda,
         pca_dims=args.pca_dims,
         learn_rate=args.learn_rate,
+        binary_input=args.binary_input,
         dataset=args.dataset,
         dropout_info=args.dropout,
     )
