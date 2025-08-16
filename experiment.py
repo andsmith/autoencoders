@@ -17,7 +17,7 @@ class AutoencoderExperiment(ABC):
     """
 
     def __init__(self, dataset, pca_dims, enc_layers, dec_layers=None, whiten_input=False, n_train_samples=0,
-                 bw_images=True, d_latent=16, batch_size=512,  learning_rate=1e-3):
+                 binary_input=True, d_latent=16, batch_size=512,  learning_rate=1e-3):
         """
         Initialize the AutoencoderExperiment.
         :param pca_dims:
@@ -37,7 +37,8 @@ class AutoencoderExperiment(ABC):
         self.n_train_samples = n_train_samples
         self.enc_layer_desc = enc_layers
         self.dec_layer_desc = dec_layers
-        self.pca_dims = self._load_data(binarize=bw_images)
+        self.binary_input = binary_input
+        self.pca_dims = self._load_data(binarize=binary_input)
         self._d_in = self.pca.d_out  # after loading data
         self._d_out = 784
 
@@ -182,6 +183,8 @@ class AutoencoderExperiment(ABC):
                             help='If set, saves images instead of showing them interactively.')
         parser.add_argument('--dec_layers', type=int, nargs='+', default=None,
                             help='List of decoder layer sizes (default: None, encoding layers reversed)')
+        parser.add_argument('--binary_input', action='store_true',default=False,
+                            help='If set, binarizes the input images (default: False)')
         for arg in (extra_args):
             parser.add_argument(arg['name'], **{k: v for k, v in arg.items() if k != 'name'})
 
@@ -228,7 +231,7 @@ class AutoencoderExperiment(ABC):
         self.x_train_pca = self.pca.fit_transform(self.x_train)
         self.x_test_pca = self.pca.encode(self.x_test)
 
-        logging.info("Data loaded: %i training samples, %i test samples", self.x_train.shape[0], self.x_test.shape[0])
+        logging.info("Data loaded: %i training samples, %i test samples.%s", self.x_train.shape[0], self.x_test.shape[0],( " (BINARIZED: > 0.5)" if binarize else ""))
         return self.pca.d_out
 
     def _maybe_save_fig(self, fig, filename):

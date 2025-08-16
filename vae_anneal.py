@@ -68,14 +68,23 @@ class Decoder(nn.Module):
 
 
 class VAE(nn.Module):
-    def __init__(self, input_dim, enc_hidden_dims, dec_hidden_dims, latent_dim, output_dim, device, dropout_info=None, lambda_reg=0.001):
+    def __init__(self, input_dim, enc_hidden_dims, dec_hidden_dims, latent_dim, output_dim, device, dropout_info=None):
+        """
+        Variational Autoencoder (VAE) model.
+        :param input_dim: Dimension of the input data.
+        :param enc_hidden_dims: List of hidden dimensions for the encoder.
+        :param dec_hidden_dims: List of hidden dimensions for the decoder.
+        :param latent_dim: Dimension of the latent space.
+        :param output_dim: Dimension of the output data.
+        :param device: Device to run the model on (CPU or GPU).
+        :param dropout_info: Optional dropout information (layer and rate).
+        """
         super().__init__()
         d_l, d_r = (dropout_info['layer'], dropout_info['rate']) if dropout_info is not None else (None, None)
         self.encoder = Encoder(input_dim, enc_hidden_dims, latent_dim, dropout_layer=d_l, dropout_rate=d_r)
         self.decoder = Decoder(latent_dim, dec_hidden_dims, output_dim)
         self.latent_dim = latent_dim
         self.input_dim = input_dim
-        self.lambda_reg = lambda_reg
         self.device = device
 
     def reparameterize(self, mu, log_var):
@@ -90,12 +99,10 @@ class VAE(nn.Module):
         recon_x = self.decoder(z)
         return recon_x, mu, log_var
 
-    def loss_function(self, recon_y, y_batch, mu, log_var, return_terms=False):
+    def loss_function(self, recon_y, y_batch, mu, log_var, beta, return_terms=False):
         MSE = F.mse_loss(recon_y, y_batch, reduction='mean')
-        # get negative log-likelihood loss to compare:
-        #MSE = F.binary_cross_entropy(recon_y, y_batch, reduction='mean')
         KLD = -0.5 * torch.mean(1 + log_var - mu.pow(2) - log_var.exp())
-        total_loss = (1-self.lambda_reg) * MSE + (self.lambda_reg) * KLD
+        total_loss =  MSE + beta * KLD
         if return_terms:
             return total_loss, MSE, KLD
         return total_loss
@@ -127,26 +134,44 @@ class VAE(nn.Module):
 
 class VAEExperiment(AutoencoderExperiment):
     WORKING_DIR = "VAE-results"
+    _DEFAULT_BETA_PARAMS = {
+        'init_value': 0.0,
+        'final_value': 1.0,
+        'sharpness': 30.0,
+        'inflection_step': 100  # Be midway between init and final at batch 100
+    }
 
-    def __init__(self, dataset, pca_dims, enc_layers, d_latent, dec_layers=None, reg_lambda=0.001,
+    def __init__(self, dataset, pca_dims, enc_layers, d_latent, dec_layers=None, beta_params=None,
                  batch_size=512, whiten_input=False, learn_rate=1e-3, dropout_info=None, **kwargs):
+        """
+        Initialize the VAE experiment.
+        :param dataset: The dataset to use for the experiment.
+        :param pca_dims: Dimensions for PCA.
+        :param enc_layers: Encoder layer dimensions.
+        :param d_latent: Latent space dimension.
+        :param dec_layers: Decoder layer dimensions.
+        :param batch_size: Batch size for training.
+        :param whiten_input: Whether to whiten the input data.
+        :param learn_rate: Learning rate for the optimizer.
+        :param dropout_info: Dropout information (layer and rate).
+        """
         self.device = torch.device(kwargs.get("device", "cpu"))
 
         self.dropout_info = dropout_info
         self._stage = 0
         self._epoch = 0
-        self.reg_lambda = reg_lambda
 
         self._save_figs = None
         self._order = None
         self._mse_errors = None
         self._reconstructed_test = None
         self._encoded_test = None
-
+        self._beta = beta_params
         self._d_in = pca_dims
         self._d_out = 28*28
         super().__init__(dataset=dataset, pca_dims=pca_dims, enc_layers=enc_layers, dec_layers=dec_layers, d_latent=d_latent, batch_size=batch_size,
                          whiten_input=whiten_input, learning_rate=learn_rate, **kwargs)
+        # Captured per epoch:
         self._history_dict = {
             'loss': [],
             'mse': [],
@@ -157,7 +182,17 @@ class VAEExperiment(AutoencoderExperiment):
             'lambda': [],
             'learn_rate': []
         }
+        # Captured per batch:
+        self._fine_grained_history= {
+            
+            'train-loss': [],
+            'train-kld': [],
+            'train-mse': [],
+            'lambda': [],
+        }
         logging.info("Initialized VAEExperiment:  %s" % (self.get_name(),))
+
+
 
     def get_name(self, file_kind=None, suffix=None):
         drop_str = "" if self.dropout_info is None else "_Drop(l=%i,r=%.2f)" % (

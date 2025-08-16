@@ -201,6 +201,51 @@ def test_fit_spaced_intervals():
     plt.tight_layout()
     plt.show()
 
+def draw_bbox(image, bbox, thickness=1, inside=True, color=(128, 128, 128)):
+    """
+    Set pixels just inside/outside the specified bounding box to the color indicated.
+    :param image:  H x W x 3  uint8 array
+    :param bbox:   Dictionary with 'x' and 'y' keys containing tuples (min, max)
+    :param thickness: Thickness of the bounding box lines
+    :param inside: If True, color the inside of the bbox; if False, color the outside
+    :param color: Color to use for the bounding box
+    """
+
+    x_min, x_max = bbox['x']
+    y_min, y_max = bbox['y']
+    if inside:
+        x_max -= thickness-1
+        y_max -= thickness-1
+        x_max += thickness-1
+        y_max += thickness-1
+    else:
+        x_min -= thickness
+        y_min -= thickness
+        x_max += thickness
+        y_max += thickness
+
+    image[y_min:y_min+thickness, x_min:x_max] = color
+    image[y_min:y_max, x_min:x_min+thickness] = color
+    image[y_min:y_max, x_max-thickness:x_max] = color
+    image[y_max-thickness:y_max, x_min:x_max] = color
+    return image
+
+
+def test_draw_bbox():
+    blank = np.zeros((10, 10, 3), dtype=np.uint8)
+    bboxes = [{'bbox': {'x': (2, 7), 'y': (2, 7)}, 'thickness': 1, 'inside': True},
+              {'bbox': {'x': (2, 7), 'y': (2, 7)}, 'thickness': 1, 'inside': False},
+              {'bbox': {'x': (2, 7), 'y': (2, 7)}, 'thickness': 2, 'inside': True},
+              {'bbox': {'x': (2, 7), 'y': (2, 7)}, 'thickness': 2, 'inside': False}]
+    fig, ax = plt.subplots(2, 2, figsize=(12, 3))
+    ax = ax.flatten()
+    for i, bbox in enumerate(bboxes):
+        image = draw_bbox(blank.copy(), **bbox)
+        ax[i].imshow(image)
+        ax[i].set_title(f"bbox: {bbox['bbox']}, thickness: {bbox['thickness']}, inside: {bbox['inside']}")
+    plt.show()
+
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

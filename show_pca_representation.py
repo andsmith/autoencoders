@@ -1,14 +1,15 @@
-from pca import MNISTPCA as PCA
-from tests import load_mnist
+from pca import PCA
+from tests import load_mnist, load_fashion_mnist
 import numpy as np
 import matplotlib.pyplot as plt
 from img_util import make_img, make_digit_mosaic
 from colors import COLORS
 import logging
 import cv2
+import argparse
 
 
-def _generate(images, samples, grid_shape, d=None, var_frac=None, orient='vertical', dataset='digits'):
+def _generate(images, samples, grid_shape, d=None, var_frac=None, orient='vertical'):
     """
     :param images: The input images.
     :param labels: The labels corresponding to the images.
@@ -19,17 +20,17 @@ def _generate(images, samples, grid_shape, d=None, var_frac=None, orient='vertic
     :param orient: Are images ordered across rows first (horizontal) or columns first (vertical)?
     """
     if d is not None:
-        pca = PCA(dims=d, dataset=dataset)
+        pca = PCA(dims=d)
     elif var_frac is not None:
-        pca = PCA(dims=var_frac, dataset=dataset)
+        pca = PCA(dims=var_frac)
     else:
-        pca = PCA(dims=0, dataset=dataset)
+        pca = None
 
     if pca is None:
         decoded_sample_images = [images[s].reshape(28, 28) for s in samples]
         title_parts = {'original': None}
     else:
-        encoded_images = pca.fit_transform(images, use_cache=False)
+        encoded_images = pca.fit_transform(images)
         decoded_images = pca.decode(encoded_images)
         train_mse = np.mean((images - decoded_images) ** 2)
         decoded_sample_images = [decoded_images[s].reshape(28, 28) for s in samples]
@@ -93,11 +94,11 @@ def _draw_img_data(img_data_list, title):
 def _plot_img_data(img_data_list, title):
     n_cols = 3
     n_rows = 3
-    fig, ax = plt.subplots(n_rows, n_cols, figsize=(12, 12))
+    fig, ax = plt.subplots(n_rows, n_cols, figsize=(12, 12),sharex=True, sharey=True)
 
     for col in range(n_cols):
         for row in range(n_rows):
-            idx = col * n_rows + row
+            idx = row * n_cols + col
             if idx < len(img_data_list):
                 img, title_info = img_data_list[idx]
                 if 'original' in title_info:
@@ -114,18 +115,18 @@ def _plot_img_data(img_data_list, title):
     plt.tight_layout()
 
 
-def draw_pca_maps(images, labels, dataset='Digits'):
+def draw_pca_maps(images, labels, dataset):
     # Show originals where values==None.
 
-    dim_grid = [None, 2, 4,
-                8, 16, 32,
+    dim_grid = [None, 2,  4,
+                8,   16,  32,
                 64, 128, 256]
 
-    var_grid = [None, 0.1, 0.25,
-                0.33, 0.5, 0.75,
+    var_grid = [None, 0.1,  0.25,
+                0.33, 0.5,  0.75,
                 0.90, 0.95, 0.99]
 
-    sample_grid_shape = [15, 10]
+    sample_grid_shape = [10, 10]
     n_samples = np.prod(sample_grid_shape)
     sample = np.array([np.random.choice(np.where(labels == i)[0], n_samples // 10, replace=False)
                       for i in range(10)]).flatten()
@@ -147,8 +148,8 @@ def draw_pca_maps(images, labels, dataset='Digits'):
     img_by_var = _draw_img_data(img_data_by_var, "PCA Maps by Fraction of Explained Variance")
     img_by_dim = _draw_img_data(img_data_by_dim, "PCA Maps by Number of Components")
 
-    cv2.imwrite("PCA-%s_by-n_comps.png" % (dataset, img_by_dim))
-    cv2.imwrite("PCA-%s_by-var_exp.png" % (dataset, img_by_var))
+    cv2.imwrite("PCA-Reconstruction_%s_by-n_comps.png" % (dataset,), img_by_dim)
+    cv2.imwrite("PCA-Reconstruction_%s_by-var_exp.png" % (dataset,), img_by_var)
 
 
 def show_low_dim_results():
@@ -178,9 +179,7 @@ def _make_comp_img(components, grid_shape, magnification, max_z=3.75):
     return cv2.resize(float_img, new_size, interpolation=cv2.INTER_CUBIC)
 
 
-def show_components(images, labels, dataset='Digits'):
-    import ipdb
-    ipdb.set_trace()
+def show_components(images, labels, dataset):
     # Show a representation of the components.
     grid_shape = (10, 15)  # rows, cols of examples to show
     mag_factor = 5
@@ -191,19 +190,37 @@ def show_components(images, labels, dataset='Digits'):
     pca.fit_transform(images)
     comps = pca.components
     image = _make_comp_img(comps, grid_shape, mag_factor)
-    cv2.imwrite("PCA-%s_Components.png" % dataset, image)
+    cv2.imwrite("PCA-Components_%s.png" % dataset, image)
     cv2.imshow("PCA Components", image)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
 
-def make_figs():
-    _, (images, labels) = load_mnist()
+def make_figs(dataset, binary=False):
 
-    draw_pca_maps(images, labels)
-    show_components(images, labels)
+    if dataset=='digits':
+        _, (images, labels) = load_mnist()
+    elif dataset=='fashion':
+        _, (images, labels) = load_fashion_mnist()
+    else:
+        raise ValueError("Unknown dataset: %s" % dataset)
+    
+    if binary:
+        images = (images > 0.5).astype(np.float32)
+        dataset = "%s-BIN" % dataset
+
+    draw_pca_maps(images, labels, dataset)
+    show_components(images, labels, dataset)
+
+
+def get_args():
+    parser = argparse.ArgumentParser(description="PCA Reconstruction & components visualization")
+    parser.add_argument("--dataset", type=str, default="digits", choices=["digits", "fashion"], help="Dataset to use")
+    parser.add_argument("--binary", action='store_true', help="Use binary images as input.")
+    parsed = parser.parse_args()
+    return {k: v for k, v in vars(parsed).items() if v is not None}
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    make_figs()
+    make_figs(**get_args())

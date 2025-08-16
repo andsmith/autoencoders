@@ -95,3 +95,8 @@ With the `entropy` and `entropy-squared` loss functions (using real-valued/sigmo
 * `pca_digits.py` - reconstruction loss of mnist (generates figures)
 * `test_embeddings.py` plot tests
 * `embed.py` - Generate an embedding from a model's latent representation of MNIST, make a PNG of it, save it.  ALso generate figures for raw PCA(2)
+
+
+##### References
+
+* ["Cyclical Annealing Schedule:  A Simple Approach to Mitigating KL Vanishing"](https://arxiv.org/pdf/1903.10145)  Hao Fu, Chunyuan Li, Xiaodong Liu, Jianfeng Gao, Asli Celikyilmaz, Lawrence Carin, 2019, NAACL.x

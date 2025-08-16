@@ -31,6 +31,7 @@ class DenseExperiment(AutoencoderExperiment):
                  dataset='digits',
                  batch_size=512,
                  d_latent=16,
+                 binary_input=False,
                  **kwargs):
         """
         Initialize the Dense Experiment with a specified number of encoding units.
@@ -56,7 +57,7 @@ class DenseExperiment(AutoencoderExperiment):
         self._d_out = 784
 
         super().__init__(pca_dims=pca_dims, enc_layers=enc_layers, dec_layers=dec_layers, batch_size=batch_size, d_latent=d_latent,
-                         whiten_input=whiten_input, learning_rate=learning_rate, dataset=dataset, **kwargs)
+                         whiten_input=whiten_input, learning_rate=learning_rate, dataset=dataset,binary_input=binary_input, **kwargs)
 
         logging.info("Experiment initialized:  %s" % self.get_name())
         if isinstance(self.encoder, Model):
@@ -68,8 +69,10 @@ class DenseExperiment(AutoencoderExperiment):
                                               ) if self.dec_layer_desc is not None else ""
         pca_str = self.pca.get_short_name()
         drop_str = "" if self.dropout is None else "_Drop(l=%i,r=%.2f)" % (self.dropout['layer'], self.dropout['rate'])
+        dataset_str = "%s%s" % (self.dataset, "-BIN" if self.binary_input else "")
+
         fname = ("%s_Dense(%s_units=%s%s%s)" %
-                 (self.dataset, pca_str, desc_str, dec_desc_str, drop_str))
+                 (dataset_str, pca_str, desc_str, dec_desc_str, drop_str))
 
         if suffix is not None:
             fname = "%s_%s" % (fname, suffix)
@@ -454,6 +457,7 @@ def dense_demo():
                          dropout_info=args.dropout,
                          dataset=args.dataset,
                          d_latent=args.d_latent,
+                         binary_input=args.binary_input,
                          batch_size=args.batch_size)
 
     de.run_staged_experiment(n_stages=args.stages,
