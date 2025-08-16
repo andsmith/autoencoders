@@ -397,12 +397,9 @@ class VAEExperiment(AutoencoderExperiment):
         ax[3].grid(True)
         ax[3].set_yscale('log')
 
-        plt.tight_layout()
-        if self._save_figs:
-            filename = self.get_name(file_kind='image', suffix='History')
-            self._maybe_save_fig(fig, filename)
-        else:
-            plt.show()
+        filename = self.get_name(file_kind='image', suffix='History')
+        self._maybe_save_fig(fig, filename)
+
 
     def _plot_code_samples(self, n_samp=39):
         """
@@ -466,12 +463,10 @@ class VAEExperiment(AutoencoderExperiment):
         plt.suptitle("Code unit distributions (black shows all units, color shows digits: %s)\n%s" % (
             ", ".join(str(d) for d in digit_subset), self.get_name()), fontsize=14)
 
-        if self._save_figs:
-            suffix = "LatentDist_stage=%i" % (self._stage+1)
-            filename = self.get_name(file_kind='image', suffix=suffix)
-            self._maybe_save_fig(fig, filename)
-        else:
-            plt.show()
+        suffix = "LatentDist_stage=%i" % (self._stage+1)
+        filename = self.get_name(file_kind='image', suffix=suffix)
+        self._maybe_save_fig(fig, filename)
+
 
     def _plot_encoding_errors(self, n_samp=39, show_diffs=False):
 
@@ -550,7 +545,9 @@ class VAEExperiment(AutoencoderExperiment):
         # ax.legend(loc='upper center', fontsize=10)
 
     # Add plotting methods as needed to match DenseExperiment
-
+    @staticmethod
+    def parse_filename(filename):
+        return {}
 
 def vae_demo():
     args = VAEExperiment.get_args("Train a variational autoencoder on MNIST data.",

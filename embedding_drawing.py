@@ -1,49 +1,13 @@
+import time
 import numpy as np
 from colors import MPL_CYCLE_COLORS, COLORS
 import cv2
 import logging
 import seaborn as sns
 import matplotlib.pyplot as plt
-from test_embeddings import make_test_data
+from scipy.spatial import KDTree
 
-
-def color_blit(image, loc_px, gray, color):
-    """
-    Draw the imagen color with transparent background.
-    :param gray: h x w floating point image (in 0, 1)
-    :param color: (r,g,b) color tuple (also uint8)
-    """
-    h, w = gray.shape
-    gray = gray.reshape((h, w, 1))
-    img_y_low, img_y_high = loc_px[1], loc_px[1] + h
-    img_x_low, img_x_high = loc_px[0], loc_px[0] + w
-    orig_patch = image[img_y_low:img_y_high, img_x_low:img_x_high]
-    patched = (1 - gray) * orig_patch + gray * color.reshape((1, 1, 3))
-    image[img_y_low:img_y_high, img_x_low:img_x_high] = patched.astype(np.uint8)    
-
-
-def _make_tile(size=(28, 28)):
-    x, y = np.meshgrid(np.linspace(0, 1, size[0]) - .5, np.linspace(0, 1, size[1]) - .5)
-    gray = 1 - 2 * np.sqrt(x**2 + y**2)
-    gray = np.clip(gray, 0, 1)**.5
-    return gray
-
-
-def test_color_blit():
-    size_wh = np.array((640, 480))
-    image = np.zeros((size_wh[1], size_wh[0], 3), dtype=np.uint8)
-    gray = _make_tile()
-    tile_size_wh = np.array((gray.shape[1], gray.shape[0]))
-    for _ in range(100):
-        loc = np.random.rand(2) * (np.array(size_wh) - tile_size_wh)
-        loc = loc.astype(int)
-        color = np.ascontiguousarray(np.random.randint(50, 255, size=(3,), dtype=np.uint8))
-        color_blit(image, loc, gray, color)
-    # Check that the image has been modified
-    plt.imshow(image)
-    plt.axis('off')
-    plt.tight_layout()
-    plt.show()
+from color_blit import draw_color_tiles_cython as color_blit
 
 
 def embed_to_pixel(locs, img_bbox):
@@ -105,27 +69,75 @@ def draw_embedding(image, embedding, images_gray, labels, colors=None):
     return image, draw_bbox
 
 
+class EmbeddingPanZoom(object):
+    """
+    Show colored tiles at the embedded locations.  Be responsive enough to run at 30 fps.
+
+    Expose a bounding-box defining the extent/view of the current rendered image and provide methods to move it,
+            pan_to(offset_xy)
+            zoom(factor)
+
+    Allow callbacks for mouse events when they happen over one or more of the tiles
+        - click/unclick 
+        - mouse-over/-out
+
+
+    """
+
+    def __init__(self, size, embed_xy, images_gray, labels, colors=None, bg_color=None, zoom_rate=1.0):
+        """
+        Initialize the EmbeddingPanZoom object.
+
+        :param size: (width, height) of the display window
+        :param embed_xy: N x 2 array of embedded (x, y) coordinates
+        :param images_gray: List of grayscale images corresponding to the embeddings
+        :param labels: List of labels for the embeddings
+        :param colors: List of C colors for the embeddings, where C is the number of unique labels and each 
+                       color is an (r,g,b)-tuple of ints in [0, 255]
+        :param bg_color: Background color for the embedding image, (r,g,b) ints in [0, 255]
+        """
+        self.bg_color = np.array((bg_color or COLORS['OFF_WHITE_RGB']), dtype=np.uint8)
+        # Internal image is bigger, what's returned is a view into the internal buffer.
+        self._pad_size = np.array((images_gray.shape[1], images_gray.shape[0]))
+        self._img = np.zeros((size[1] + self._pad_size[1]*2,
+                              size[0] + self._pad_size[0]*2, 3), dtype=np.uint8)
+        
+
+        self.bbox = {'x': (0.0, 1.0), 'y': (0.0, 1.0)}
+        self.size = size
+        self.embed_xy = embed_xy
+        self.images_gray = images_gray.reshape(-1, 28, 28)
+        self.labels = labels
+        self.colors = colors if colors is not None else (
+            np.array(sns.color_palette("husl", 10))*255.0).astype(int).tolist()
+        self.colors = np.array(self.colors, dtype=np.uint8)
+
+
 def test_draw_embedding():
-    size = 640,480
-    image = np.zeros((size[1], size[0], 3), dtype=np.uint8)
-    image[:] = COLORS['OFF_WHITE_RGB']
-    data, labels = make_test_data(d=10, n_points=300)
+    from tests import load_mnist
     from embeddings import PCAEmbedding
     pca = PCAEmbedding()
-    locations = pca.fit_embed(data)
-    gray_tile = _make_tile()
-    n_samples = locations.shape[0]
-    images_gray = [gray_tile for _ in range(n_samples)]
+    (x_train, y_train), _ = load_mnist()
+    x_embed = pca.fit_embed(x_train)
 
-    image = draw_embedding(image, locations, images_gray, labels=labels)
-    plt.imshow(image[:,:,::-1])
-    plt.axis('off')
-    plt.tight_layout()
-    plt.show()
+    size = 1200, 970
+    colors = MPL_CYCLE_COLORS
+
+    epz = EmbeddingPanZoom(size, x_embed, x_train, y_train, colors)
+
+    win_name = "Embedding Pan/Zoom test"
+    cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(win_name, size[0], size[1])
+    cv2.setMouseCallback(epz.mouse_callback)
+
+    while True:
+        frame = epz.get_frame()
+        cv2.imshow(win_name, frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    # test_color_blit()
+
     test_draw_embedding()
-    # test_embed_to_pixels()

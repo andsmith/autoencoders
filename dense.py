@@ -26,7 +26,6 @@ class DenseExperiment(AutoencoderExperiment):
                  pca_dims=64,
                  whiten_input=False,
                  dropout_info=None,
-                 act_fns=None,
                  learning_rate=1e-3,
                  dec_layers=None,
                  dataset='digits',
@@ -45,14 +44,14 @@ class DenseExperiment(AutoencoderExperiment):
         self.dropout = dropout_info
         self.enc_layer_desc = enc_layers
         self.dec_layer_desc = dec_layers
-        self.act_fns = self._DEFAULT_ACT_FNS if act_fns is None else act_fns
+        self.act_fns = self._DEFAULT_ACT_FNS  # not worth changing?
         self._save_figs = None
 
         self._stage = 0
         self._epoch = 0
 
+        # Should be sigmoid to resemble pixel values in [0, 1], probably don't change.
         if 'output' not in self.act_fns:
-            # to resemble pixel values in [0, 1], probably don't change.
             self.act_fns['output'] = 'sigmoid'
         self._d_out = 784
 
@@ -87,6 +86,79 @@ class DenseExperiment(AutoencoderExperiment):
         if file_ext is not None:
             return os.path.join(DenseExperiment.WORKING_DIR, fname)
         return fname
+
+    @staticmethod
+    def parse_filename(filename):
+        """
+        Parse the filename to extract experiment parameters.
+        :returns: dict with network architecture parameters, can be passed as a set of arguments to DenseExperiment().
+        """
+        print("\n%s\n" % filename)
+        file = os.path.split(os.path.abspath(filename))[1]
+        kind_pattern = r'([a-z]+)[_\-]([a-zA-Z\-\_]+)'
+
+        # internal structure is everything between outer parentheses
+        int_start, int_end = file.find("("), len(file)-file[::-1].find(")")
+
+        internal = file[int_start:int_end]  # keep parentheses
+        prefix = file[:int_start]
+
+        pca_vs_rest_pattern = r'PCA\(([^\)]+)\)_(.+)'  # dataset-pca(pca_params)
+        # PCA format is "<dims>,<whitening>" where <dims> is an int, and <whitening> is "W" or "UW"
+        pca_int_pattern = r'(\d+),(W|UW)'
+        # ints separated by dash, final is code size (must have at least 1 number here)
+        enc_pattern = r'units=(.+?)[^\d-]'
+        # optional, same format, assumed reverse of encoder if not present, l=layer (of encoder unit, can't be final/code layer), r=rate.
+        dec_pattern = r'dec_units=(.?)'
+        dropout_pattern = r'Drop\(l=(\d+),r=(\d\.?\d*)\)'
+
+        file_kind_match = re.search(kind_pattern, prefix)
+        if not file_kind_match:
+            raise ValueError("No dataset_model string found in filename: %s, in prefix: %s" % (filename, prefix))
+        dataset, dense = file_kind_match.groups()
+        if dense != 'Dense':
+            raise ValueError("Expected 'Dense' in dataset_model string, found: %s" % dense)
+
+        pca_match = re.search(pca_vs_rest_pattern, internal)
+        if not pca_match:
+            raise ValueError("No PCA match found in filename: %s, in params: %s" % (filename, internal))
+        pca_desc, arch_desc = pca_match.group(1), pca_match.group(2)
+        pca_int_match = re.search(pca_int_pattern, pca_desc)
+        if not pca_int_match:
+            raise ValueError("No PCA integer match found in filename: %s, in params: %s" % (filename, pca_desc))
+        dims, whiten = int(pca_int_match.group(1)), pca_int_match.group(2) == 'W'
+
+        encoder_match = re.search(enc_pattern, arch_desc)
+        if encoder_match:
+            enc_layers = tuple(map(int, encoder_match.group(1).split('-')))
+        else:
+            raise ValueError("No encoder description 'units=...' found in filename: %s, in params: %s" %
+                             (filename, arch_desc))
+
+        decoder_match = re.search(dec_pattern, arch_desc)
+        if decoder_match:
+            dec_layers = tuple(map(int, decoder_match.group(1).split('-')))
+        else:
+            dec_layers = None
+
+        dropout_match = re.search(dropout_pattern, arch_desc)
+        if dropout_match:
+            dropout_info = dict(dropout_layer=int(dropout_match.group(1)),
+                                dropout_rate=float(dropout_match.group(2)))
+        else:
+            dropout_info = None
+
+        params = {
+            'enc_layers': list(enc_layers[:-1]),
+            'd_latent': enc_layers[-1],
+            'pca_dims': 0 if dims == 784 else dims,
+            'whiten_input': whiten,
+            'dropout_info': dropout_info,
+            'dec_layers': dec_layers,
+            'dataset': dataset
+        }
+
+        return params
 
     def _init_encoder_layers(self, inputs):
         enc_layers_sizes = self.enc_layer_desc+[self.code_size]
@@ -177,15 +249,14 @@ class DenseExperiment(AutoencoderExperiment):
             json.dump(self._history_dict, f)
         logging.info("Training history saved to %s", os.path.join(path, hist))
 
-    def load_weights(self, path='.'):
+    def load_weights(self):
         filename = self.get_name(file_ext='weights')
-        full_path = os.path.join(path, filename)
-        if os.path.exists(full_path):
-            self.autoencoder.load_weights(full_path)
-            logging.info("Model weights loaded from %s", full_path)
+        if os.path.exists(filename):
+            self.autoencoder.load_weights(filename)
+            logging.info("Model weights loaded from %s", filename)
 
             hist = self.get_name(file_ext='history')
-            hist_path = os.path.join(path, hist)
+            hist_path = self.get_name(file_ext='history')
             if os.path.exists(hist_path):
                 with open(hist_path, 'r') as f:
                     self._history_dict = json.load(f)
@@ -194,48 +265,15 @@ class DenseExperiment(AutoencoderExperiment):
                 self._history_dict = None
                 logging.info("No training history found at %s", hist_path)
         else:
-            raise FileNotFoundError(f"Model weights file {full_path} not found.")
-
-    @staticmethod
-    def parse_filename(filename):
-        """
-        Parse the filename to extract encoding layer sizes and other parameters.
-        :param filename: The filename to parse.
-        :return: A dictionary with parsed parameters.
-        """
-        file = os.path.split(filename)[1]
-        pattern = r'Dense\(PCA=(\d+)_units=(.*?)_encode=(.*?)_internal=(.*?)\)\.weights\.h5'
-        pattern_asym = r'Dense\(PCA=(\d+)_units=(.*?)_dec-units=(.*?)_encode=(.*?)_internal=(.*?)\)\.weights\.h5'
-        match = re.match(pattern, file)
-        match_asym = re.match(pattern_asym, file)
-        match = match if match is not None else match_asym
-        if match:
-            pca_dim_param = int(match.group(1))
-            enc_layers = tuple(map(int, match.group(2).split(',')))
-            encoding_act_fn = match.group(3)
-            internal_act_fn = match.group(4)
-            dec_layers = tuple(map(int, match.group(5).split(','))) if match_asym else None
-            return {
-                'pca_dim': pca_dim_param,
-                'enc_layers': enc_layers,
-                'encoding_act_fn': encoding_act_fn,
-                'internal_act_fn': internal_act_fn,
-                'dec_layers': dec_layers
-            }
-        else:
-            raise ValueError(f"Filename {filename} does not match expected format.")
+            raise FileNotFoundError(f"Model weights file {filename} not found.")
 
     @staticmethod
     def from_filename(filename):
+        filename = os.path.abspath(filename)
+        logging.info("Loading DenseExperiment from filename: %s", filename)
         params = DenseExperiment.parse_filename(filename)
-        network = DenseExperiment(pca_dims=params['pca_dim'],
-                                  enc_layers=params['enc_layers'],
-                                  act_fns={
-            'encoding': params['encoding_act_fn'],
-            'internal': params['internal_act_fn']
-        }
-        )
-        network.load_weights(path=os.path.dirname(filename))
+        network = DenseExperiment(**params)
+        network.load_weights()
         return network
 
     def _attempt_resume(self):

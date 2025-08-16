@@ -51,9 +51,9 @@ def test_vae_from_filename():
 
 
 def test_dense_from_filename():
-    filename="Dense(16_encode=relu_internal=relu)_TrainEpochs=100.weights.h5"
-    net= DenseExperiment.from_filename(filename)
-    logging.info("Loaded DenseExperiment from filename: %s", filename)
+    file_small = r".\Dense-results\digits_Dense(PCA(784,UW)_units=2-16)history.json"
+    net = DenseExperiment.from_filename(file_small)
+    logging.info("Loaded DenseExperiment from filename: %s", file_small)
     x_test, y_test = net.x_test, net.y_test
     digits = x_test[:100,:]
     coded_digits = net.encode_samples(digits)
@@ -76,7 +76,7 @@ def test_dense_from_filename():
     # colorbar
     plt.colorbar(ax[2].imshow(coded_digits, cmap='viridis'), ax=ax[2])
     ax[2].set_title("Encoded Samples")
-    plt.suptitle("Dense Autoencoder sample digits & codes\nfrom file: " + filename)
+    plt.suptitle("Dense Autoencoder sample digits & codes\nfrom file: " + file_small)
     plt.tight_layout()
     plt.show()
 
@@ -89,5 +89,5 @@ def test_fashion_mnist():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    #test_dense_from_filename()
-    test_fashion_mnist()
+    test_dense_from_filename()
+    #test_fashion_mnist()

@@ -51,8 +51,18 @@ class AutoencoderExperiment(ABC):
     @abstractmethod
     def get_name(self):
         """
-        Get the name of the experiment.
+        Get the name of the experiment with all the model hyperparameters, layer sizes, etc.
         :return: string
+        """
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def parse_filename(self, filename):
+        """
+        Inverse of .get_name(), get model hyperparameters from the description in the filename
+        :param filename: The filename to parse.
+        :return: A dictionary with parsed parameters.
         """
         pass
 
@@ -105,7 +115,7 @@ class AutoencoderExperiment(ABC):
         pass
 
     @abstractmethod
-    def load_weights(self, filename):
+    def load_weights(self):
         pass
 
     @staticmethod
@@ -181,7 +191,7 @@ class AutoencoderExperiment(ABC):
         if parsed.dropout_layer is not None:
             if parsed.dropout_rate == 0.0:
                 parser.error("Dropout rate must be > 0.0 if dropout layer is specified.")
-            if parsed.dropout_layer >= len(parsed.layers) :
+            if parsed.dropout_layer >= len(parsed.layers):
                 parser.error("Dropout layer cannot be the final/coding layer")
             parsed.dropout = {'layer': parsed.dropout_layer,
                               'rate': parsed.dropout_rate}

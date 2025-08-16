@@ -5,11 +5,12 @@ import matplotlib.pyplot as plt
 from util import make_test_data
 import logging
 import pickle
+import re
 
 
 class PCA(object):
 
-    def __init__(self, dims, whiten=True):
+    def __init__(self, dims, whiten=False):
         """
 
         :param pca_dims: Number of PCA dimensions for pre-processing:
@@ -146,7 +147,7 @@ class MNISTPCA(PCA):
         return "%s_PCA(dim=%s_whiten=%s_n-train=%s)" % (self.dataset, nd, "T" if self.whiten else "F", nt)
 
     def get_short_name(self):
-        return "%s-PCA(%s,%s)" % (self.dataset, self.d_out, ("W" if self.whiten else "UW"))
+        return "PCA(%s,%s)" % (self.d_out, ("W" if self.whiten else "UW"))
 
     def _cache_name(self, n_train, n_dims):
         file = self.get_name(n_train, n_dims) + ".pkl"
@@ -232,13 +233,13 @@ def test_pca_modes(plot=False):
 
 def test_pca_layer(plot=False):
     d = 100
-    n_clusters=5
+    n_clusters = 5
     data, labels = make_test_data(d, 5000, n_clusters=n_clusters, separability=1.0)
     pca = PCA(dims=5)
     reduced_data = pca.fit_transform(data)
     if plot:
         fig, ax = plt.subplots(1, 2, figsize=(8, 5))
-        ax[0].scatter(data[:, 0], data[:, 1], c=labels,s=2)
+        ax[0].scatter(data[:, 0], data[:, 1], c=labels, s=2)
         ax[0].set_title("Original data (first 2 of %i dims)" % (d,))
         ax[1].scatter(reduced_data[:, 0], reduced_data[:, 1], c=labels, s=2)
         ax[1].set_title("PCA-reduced data (first 2 of %i dims)" % (reduced_data.shape[1],))
