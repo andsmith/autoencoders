@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from argparse import ArgumentParser
 from pca import MNISTPCA as PCA
 
-from mnist import MNISTData, FashionMNISTData
+from mnist import datasets
 import logging
 
 
@@ -26,8 +26,8 @@ class AutoencoderExperiment(ABC):
              < 1, fraction of variance
         :param n_train_samples: Number of training samples to use (0 for all 60k).
         """
-        if dataset not in ['digits', 'fashion']:
-            raise ValueError("Dataset must be 'digits' or 'fashion'")
+        if dataset not in datasets:
+            raise ValueError("Dataset must be one of the following: %s" % list(datasets.keys()))
         self.dataset = dataset
         self.whiten_input = whiten_input
         self.learning_rate = learning_rate
@@ -148,7 +148,7 @@ class AutoencoderExperiment(ABC):
             self._history_dict[key].extend(more_history[key])
 
     @staticmethod
-    def get_args(description=None, extra_args=(), layers_default = [64]):
+    def get_args(description=None, extra_args=(), layers_default=[64]):
         """
         Syntax:  python dense.py --layers 512 128 64 --epochs 25 --stages 10 --no_plot
         this creates a dense autoencoder with encoding layers that have 512, 
@@ -158,7 +158,11 @@ class AutoencoderExperiment(ABC):
         description = "Run an autoencoder." if description is None else description
         parser = ArgumentParser(description=description)
         parser.add_argument('--dataset', type=str, default='digits',
-                            help="'digits' (default), or 'fashion'")
+                            help="Which dataset to use: "
+                            "    'digits' (MNIST, handwritten digits),"
+                            "    'fashion' (Fashion-MNIST),"
+                            "    'numeric' (Typeface-MNIST),"
+                            "    'alphanumeric' (94_character_TMNIST)")
         parser.add_argument('--pca_dims', type=float, default=25,
                             help="PCA-preprocessing:[=0, whitening, no pca] / [int>0, number of PCA dims] / [0<float<1, frac of variance to keep]")
         parser.add_argument('--whiten', action='store_true',
@@ -183,7 +187,7 @@ class AutoencoderExperiment(ABC):
                             help='If set, saves images instead of showing them interactively.')
         parser.add_argument('--dec_layers', type=int, nargs='+', default=None,
                             help='List of decoder layer sizes (default: None, encoding layers reversed)')
-        parser.add_argument('--binary_input', action='store_true',default=False,
+        parser.add_argument('--binary_input', action='store_true', default=False,
                             help='If set, binarizes the input images (default: False)')
         for arg in (extra_args):
             parser.add_argument(arg['name'], **{k: v for k, v in arg.items() if k != 'name'})
@@ -212,11 +216,11 @@ class AutoencoderExperiment(ABC):
         """
         return dimensionality of training data
         """
-        self.mnist_data = MNISTData() if self.dataset == 'digits' else FashionMNISTData()
+
+        self.mnist_data = datasets[self.dataset]()
         self.x_train = self.mnist_data.x_train.reshape(-1, 28*28)
         self.x_test = self.mnist_data.x_test.reshape(-1, 28*28)
-        self.y_train = np.where(self.mnist_data.y_train)[1]
-        self.y_test = np.where(self.mnist_data.y_test)[1]
+        self.y_train, self.y_test = self.mnist_data.y_train, self.mnist_data.y_test
 
         if self.n_train_samples > 0:
             inds = np.random.choice(len(self.x_train), self.n_train_samples, replace=False)
@@ -231,7 +235,8 @@ class AutoencoderExperiment(ABC):
         self.x_train_pca = self.pca.fit_transform(self.x_train)
         self.x_test_pca = self.pca.encode(self.x_test)
 
-        logging.info("Data loaded: %i training samples, %i test samples.%s", self.x_train.shape[0], self.x_test.shape[0],( " (BINARIZED: > 0.5)" if binarize else ""))
+        logging.info("Data loaded: %i training samples, %i test samples.%s",
+                     self.x_train.shape[0], self.x_test.shape[0], (" (BINARIZED: > 0.5)" if binarize else ""))
         return self.pca.d_out
 
     def _maybe_save_fig(self, fig, filename):

@@ -6,6 +6,10 @@
 *.weights
 *_bkp
 *.bat
+*.zip
+*.c
+*.npz
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

@@ -1,6 +1,6 @@
 from pca import PCA
 from tests import load_mnist, load_fashion_mnist
-from load_typographyMNIST import load_alphanumeric, load_numeric
+from load_typographyMNIST import load_alphanumeric, load_numeric, GOOD_CHAR_SET
 import numpy as np
 import matplotlib.pyplot as plt
 from img_util import make_img, make_digit_mosaic
@@ -8,6 +8,11 @@ from colors import COLORS
 import logging
 import cv2
 import argparse
+import os
+from multiprocessing import Pool, cpu_count
+
+
+_OUTPUT_DIR = "PCA"
 
 
 def _generate(images, samples, grid_shape, d=None, var_frac=None, orient='vertical'):
@@ -116,6 +121,10 @@ def _plot_img_data(img_data_list, title):
     plt.tight_layout()
 
 
+def _generate_hlpr(kwargs):
+    return _generate(**kwargs)
+
+
 def draw_pca_maps(images, labels, dataset):
     # Show originals where values==None.
 
@@ -127,7 +136,7 @@ def draw_pca_maps(images, labels, dataset):
                 0.33, 0.5,  0.75,
                 0.90, 0.95, 0.99]
 
-    sample_grid_shape = [10, 10]
+    sample_grid_shape = [10, 15]  # keep 10 rows for digits/numeric
     n_samples = np.prod(sample_grid_shape)
     n_labels = len(np.unique(labels))
 
@@ -137,14 +146,25 @@ def draw_pca_maps(images, labels, dataset):
     for i in range(n_labels):
         sample[i] = np.random.choice(np.where(labels == i)[0], n_samples // n_labels, replace=False)
     sample = np.array(sample).flatten()
+    unused = np.setdiff1d(np.where(labels == i)[0], sample)
+    if len(sample) < n_samples:
+        # fill the rest with random samples
+        remaining = n_samples - len(sample)
+        random_samples = np.random.choice(unused, remaining, replace=False)
+        sample = np.concatenate([sample, random_samples])
 
     orient = 'vertical' if sample_grid_shape[0] > sample_grid_shape[1] else 'horizontal'
 
-    img_data_by_dim = [_generate(images, sample, sample_grid_shape, d=d,
+    img_data_by_dim_work = [dict(images=images, samples=sample, grid_shape=sample_grid_shape, d=d,
                                  var_frac=None, orient=orient) for d in dim_grid]
-    img_data_by_var = [_generate(images, sample, sample_grid_shape, d=None,
+    img_data_by_var_work = [dict(images=images, samples=sample, grid_shape=sample_grid_shape, d=None,
                                  var_frac=v, orient=orient) for v in var_grid]
-
+    img_data_by_dim = [_generate_hlpr(work) for work in img_data_by_dim_work]
+    img_data_by_var = [_generate_hlpr(work) for work in img_data_by_var_work]
+    # combined_work = img_data_by_dim_work + img_data_by_var_work
+    # with Pool(processes=3) as pool:
+    #     results = pool.map(_generate_hlpr, combined_work)
+    # img_data_by_dim, img_data_by_var = results[:len(img_data_by_dim_work)], results[len(img_data_by_dim_work):]
     # Show by # of PCA dimensions:
     _plot_img_data(img_data_by_dim, "PCA Maps by Number of Components")
     # Show by fraction of explained variance:
@@ -155,8 +175,8 @@ def draw_pca_maps(images, labels, dataset):
     img_by_var = _draw_img_data(img_data_by_var, "PCA Maps by Fraction of Explained Variance")
     img_by_dim = _draw_img_data(img_data_by_dim, "PCA Maps by Number of Components")
 
-    cv2.imwrite("PCA-Reconstruction_%s_by-n_comps.png" % (dataset,), img_by_dim)
-    cv2.imwrite("PCA-Reconstruction_%s_by-var_exp.png" % (dataset,), img_by_var)
+    cv2.imwrite(os.path.join(_OUTPUT_DIR, "PCA-Reconstruction_%s_by-n_comps.png" % (dataset,)), img_by_dim)
+    cv2.imwrite(os.path.join(_OUTPUT_DIR, "PCA-Reconstruction_%s_by-var_exp.png" % (dataset,)), img_by_var)
 
 
 def show_low_dim_results():
@@ -197,7 +217,7 @@ def show_components(images, labels, dataset):
     pca.fit_transform(images)
     comps = pca.components
     image = _make_comp_img(comps, grid_shape, mag_factor)
-    cv2.imwrite("PCA-Components_%s.png" % dataset, image)
+    cv2.imwrite(os.path.join(_OUTPUT_DIR, "PCA-Components_%s.png" % dataset), image)
     cv2.imshow("PCA Components", image)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
@@ -206,18 +226,19 @@ def show_components(images, labels, dataset):
 def make_figs(dataset, binary=False):
 
     if dataset == 'digits':
-        _, (images, labels) = load_mnist()
+        (train_images, train_labels), (test_images, test_labels) = load_mnist()
     elif dataset == 'fashion':
-        _, (images, labels) = load_fashion_mnist()
+        (train_images, train_labels), (test_images, test_labels) = load_fashion_mnist()
     elif dataset == 'numeric':
-        _, (images, labels) = load_numeric()
+        (train_images, train_labels), (test_images, test_labels) = load_numeric()
     elif dataset == 'alphanumeric':
-
-        _, (images, labels) = load_alphanumeric(subset=['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K',
-                                                        'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V',
-                                                        'W', 'X', 'Y', 'Z'], numeric_labels=True)
+        (train_images, train_labels), (test_images, test_labels) = load_alphanumeric(
+            subset=GOOD_CHAR_SET, numeric_labels=True)
     else:
         raise ValueError("Unknown dataset: %s" % dataset)
+
+    images = np.concatenate((train_images, test_images), axis=0)
+    labels = np.concatenate((train_labels, test_labels), axis=0)
 
     if binary:
         images = (images > 0.5).astype(np.float32)

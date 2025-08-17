@@ -117,10 +117,11 @@ class PCA(object):
 
 class MNISTPCA(PCA):
     _WORKING_DIR = "PCA"
+    _DATASETS = ['digits', 'fashion', 'numeric', 'alphanumeric']
 
     def __init__(self, dataset, *args, **kwargs):
         self.dataset = dataset
-        if dataset not in ['digits', 'fashion']:
+        if dataset not in self._DATASETS:
             raise ValueError("Unknown dataset: %s" % dataset)
         super().__init__(*args, **kwargs)
         logging.info("%s initialized.", self.get_name())
