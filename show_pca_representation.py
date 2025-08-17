@@ -135,7 +135,8 @@ def draw_pca_maps(images, labels, dataset):
     var_grid = [None, 0.1,  0.25,
                 0.33, 0.5,  0.75,
                 0.90, 0.95, 0.99]
-
+    # dim_grid,var_grid = [32],[.9]  # just draw one for testing
+   
     sample_grid_shape = [10, 15]  # keep 10 rows for digits/numeric
     n_samples = np.prod(sample_grid_shape)
     n_labels = len(np.unique(labels))
@@ -146,7 +147,7 @@ def draw_pca_maps(images, labels, dataset):
     for i in range(n_labels):
         sample[i] = np.random.choice(np.where(labels == i)[0], n_samples // n_labels, replace=False)
     sample = np.array(sample).flatten()
-    unused = np.setdiff1d(np.where(labels == i)[0], sample)
+    unused = np.setdiff1d(np.arange(len(labels)), sample)
     if len(sample) < n_samples:
         # fill the rest with random samples
         remaining = n_samples - len(sample)
