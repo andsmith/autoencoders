@@ -1,5 +1,6 @@
 from pca import PCA
 from tests import load_mnist, load_fashion_mnist
+from load_typographyMNIST import load_alphanumeric, load_numeric
 import numpy as np
 import matplotlib.pyplot as plt
 from img_util import make_img, make_digit_mosaic
@@ -94,7 +95,7 @@ def _draw_img_data(img_data_list, title):
 def _plot_img_data(img_data_list, title):
     n_cols = 3
     n_rows = 3
-    fig, ax = plt.subplots(n_rows, n_cols, figsize=(12, 12),sharex=True, sharey=True)
+    fig, ax = plt.subplots(n_rows, n_cols, figsize=(12, 12), sharex=True, sharey=True)
 
     for col in range(n_cols):
         for row in range(n_rows):
@@ -128,8 +129,14 @@ def draw_pca_maps(images, labels, dataset):
 
     sample_grid_shape = [10, 10]
     n_samples = np.prod(sample_grid_shape)
-    sample = np.array([np.random.choice(np.where(labels == i)[0], n_samples // 10, replace=False)
-                      for i in range(10)]).flatten()
+    n_labels = len(np.unique(labels))
+
+    # Get an equal number of samples for each label:
+
+    sample = [[] for _ in range(n_labels)]
+    for i in range(n_labels):
+        sample[i] = np.random.choice(np.where(labels == i)[0], n_samples // n_labels, replace=False)
+    sample = np.array(sample).flatten()
 
     orient = 'vertical' if sample_grid_shape[0] > sample_grid_shape[1] else 'horizontal'
 
@@ -181,7 +188,7 @@ def _make_comp_img(components, grid_shape, magnification, max_z=3.75):
 
 def show_components(images, labels, dataset):
     # Show a representation of the components.
-    grid_shape = (10, 15)  # rows, cols of examples to show
+    grid_shape = (26, 26)  # rows, cols of examples to show
     mag_factor = 5
     n_comps = grid_shape[0] * grid_shape[1]
 
@@ -198,13 +205,20 @@ def show_components(images, labels, dataset):
 
 def make_figs(dataset, binary=False):
 
-    if dataset=='digits':
+    if dataset == 'digits':
         _, (images, labels) = load_mnist()
-    elif dataset=='fashion':
+    elif dataset == 'fashion':
         _, (images, labels) = load_fashion_mnist()
+    elif dataset == 'numeric':
+        _, (images, labels) = load_numeric()
+    elif dataset == 'alphanumeric':
+
+        _, (images, labels) = load_alphanumeric(subset=['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K',
+                                                        'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V',
+                                                        'W', 'X', 'Y', 'Z'], numeric_labels=True)
     else:
         raise ValueError("Unknown dataset: %s" % dataset)
-    
+
     if binary:
         images = (images > 0.5).astype(np.float32)
         dataset = "%s-BIN" % dataset
@@ -215,7 +229,8 @@ def make_figs(dataset, binary=False):
 
 def get_args():
     parser = argparse.ArgumentParser(description="PCA Reconstruction & components visualization")
-    parser.add_argument("--dataset", type=str, default="digits", choices=["digits", "fashion"], help="Dataset to use")
+    parser.add_argument("--dataset", type=str, default="digits",
+                        choices=["digits", "fashion", 'numeric', 'alphanumeric'], help="Dataset to use")
     parser.add_argument("--binary", action='store_true', help="Use binary images as input.")
     parsed = parser.parse_args()
     return {k: v for k, v in vars(parsed).items() if v is not None}

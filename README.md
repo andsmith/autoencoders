@@ -99,4 +99,5 @@ With the `entropy` and `entropy-squared` loss functions (using real-valued/sigmo
 
 ##### References
 
-* ["Cyclical Annealing Schedule:  A Simple Approach to Mitigating KL Vanishing"](https://arxiv.org/pdf/1903.10145)  Hao Fu, Chunyuan Li, Xiaodong Liu, Jianfeng Gao, Asli Celikyilmaz, Lawrence Carin, 2019, NAACL.x
+* ["Cyclical Annealing Schedule:  A Simple Approach to Mitigating KL Vanishing"](https://arxiv.org/pdf/1903.10145),  Hao Fu, Chunyuan Li, Xiaodong Liu, Jianfeng Gao, Asli Celikyilmaz, Lawrence Carin, 2019.
+* ["Typography-MNIST (TMNIST): an MNIST-Style Image Dataset to Categorize Glyphs and Font-Styles"](https://arxiv.org/abs/2202.08112), Nimish Magre and Nicholas Brown, 2022.

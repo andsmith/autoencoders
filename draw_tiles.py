@@ -1,5 +1,6 @@
 """
 C extension for fast digit drawing
+Run stand-alone for speed tests.
 """
 from turtle import color
 import numpy as np
