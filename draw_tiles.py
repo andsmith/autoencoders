@@ -2,6 +2,7 @@
 C extension for fast digit drawing
 Run stand-alone for speed tests.
 """
+from email.mime import image
 from turtle import color
 import numpy as np
 from tests import load_mnist
@@ -69,12 +70,19 @@ def draw_color_tiles_reference(image, locs_px, gray_tiles, color_labels, colors)
         image[img_y_low:img_y_high, img_x_low:img_x_high] = patched.astype(np.uint8)
 
 
-def test_draw_color_tiles_reference():
+def draw_color_tiles_jax(image, locs_px, gray_tiles, color_labels, colors):
+    """
+    functional -> in-place
+    """
+    image[:] = draw_color_tiles_jax_blend(image, locs_px, gray_tiles, color_labels, colors)
+
+
+def speed_comparison():
     logging.info("Loading data...")
     (x_train, labels), _ = load_mnist()
     image_size = (1024, 1024)
-    image = np.zeros((image_size[0], image_size[1], 3), dtype=np.uint8)
-    image[:] = COLORS["OFF_WHITE_RGB"]
+    blank = np.zeros((image_size[0], image_size[1], 3), dtype=np.uint8)
+    blank[:] = COLORS["OFF_WHITE_RGB"]
     logging.info("Data loaded, starting PCA...")
     pca = MNISTPCA('digits', dims=2)
     locs = pca.fit_transform(x_train)
@@ -84,110 +92,55 @@ def test_draw_color_tiles_reference():
 
     locs_px[:, 0] = np.clip(locs_px[:, 0], 0, image_size[1] - 28)
     locs_px[:, 1] = np.clip(locs_px[:, 1], 0, image_size[0] - 28)
+    gray_tiles = x_train.reshape(-1, 28, 28)
 
-    logging.info("Starting draw...")
-    t0 = time.perf_counter()
+    def _test_and_draw(ax, test_func, n_samp=0):
+        """
+        Test & time it, plot results, return theoretical max frames to get 30 FPS.
+        """
 
-    draw_color_tiles_reference(image=image,
-                               locs_px=locs_px,
-                               gray_tiles=x_train.reshape(-1, 28, 28),
-                               color_labels=labels,
-                               colors=np.array(MPL_CYCLE_COLORS, dtype=np.uint8))
-    t1 = time.perf_counter()
-    duration = t1 - t0
+        plot_locs = (locs_px[:n_samp] if n_samp > 0 else locs_px).astype(np.int32)
+        plot_labels = (labels[:n_samp] if n_samp > 0 else labels).astype(np.int32)
+        plot_tiles = (gray_tiles[:n_samp] if n_samp > 0 else gray_tiles).astype(np.float32)
+        n_samp = plot_labels.size
+        t0 = time.perf_counter()
+        image = blank.copy()
+        test_func(image=image, locs_px=plot_locs, gray_tiles=plot_tiles, color_labels=plot_labels,
+                  colors=np.array(MPL_CYCLE_COLORS, dtype=np.uint8))
+        t1 = time.perf_counter()
+        duration = t1 - t0
 
-    draw_rate = labels.size / duration
-    max_per_30fps = int(draw_rate * (1.0/30))
-    logging.info(f"Drawing {labels.size} images took {duration:.4f} seconds")
-    logging.info(f"Draw rate: {draw_rate:.2f} images per second")
-    logging.info("At 30 FPS, can draw %i tiles per frame." % (max_per_30fps))
+        draw_rate = n_samp / duration
+        max_for_30fps = int(draw_rate * (1.0/30))
+        logging.info(f"Drawing {n_samp} images took {duration:.4f} seconds")
+        logging.info(f"Draw rate: {draw_rate:.2f} images per second")
+        logging.info("At 30 FPS, can draw %i tiles per frame." % (max_for_30fps))
+        ax.imshow(image)
+        ax.axis('off')
+        ax.set_title("%s\nimages:  %i,duration:%.3f sec,\nFPS:  %.2f." %
+                     (test_func.__name__, n_samp, duration, 1.0/(duration)))
 
-    fast_image = image*0 + COLORS['OFF_WHITE_RGB']
-    t2 = time.perf_counter()
-    draw_color_tiles_reference(image=fast_image,
-                               locs_px=locs_px[:max_per_30fps,],
-                               gray_tiles=x_train.reshape(-1, 28, 28),
-                               color_labels=labels[:max_per_30fps],
-                               colors=np.array(MPL_CYCLE_COLORS, dtype=np.uint8))
-    fast_duration = time.perf_counter() - t2
+        ax.set_xticks([])
+        ax.set_yticks([])
+        # turn off
+        ax.set_frame_on(False)
+        return max_for_30fps
 
-    vec_image = image*0 + COLORS['OFF_WHITE_RGB']
-    t2 = time.perf_counter()
-    n_vec_draw = x_train.shape[0]
-    draw_color_tiles_reference(image=vec_image,
-                               locs_px=locs_px[:n_vec_draw],
-                               gray_tiles=x_train.reshape(-1, 28, 28)[:n_vec_draw],
-                               color_labels=labels[:n_vec_draw],
-                               colors=np.array(MPL_CYCLE_COLORS, dtype=np.uint8))
-    vec_duration = time.perf_counter() - t2
-
-    jax_image = image*0 + COLORS['OFF_WHITE_RGB']
-
-    # Run first to compile
-    _ = draw_color_tiles_jax_blend(image=jax_image,
+    # prime jax
+    _ = draw_color_tiles_jax(image=blank.copy(),
                              locs_px=locs_px[:10],
-                             gray_tiles=x_train.reshape(-1, 28, 28)[:10],
+                             gray_tiles=gray_tiles[:10],
                              color_labels=labels[:10],
                              colors=np.array(MPL_CYCLE_COLORS, dtype=np.uint8))
-    
-
-    t2 = time.perf_counter()
-    n_jax_draw = 60000
-    jax_image = draw_color_tiles_jax_blend(image=jax_image,
-                                     locs_px=locs_px[:n_jax_draw],
-                                     gray_tiles=x_train.reshape(-1, 28, 28)[:n_jax_draw],
-                                     color_labels=labels[:n_jax_draw],
-                                     colors=np.array(MPL_CYCLE_COLORS, dtype=np.uint8))
-    jax_duration = time.perf_counter() - t2
-
-
-    cython_image = (image*0+COLORS['OFF_WHITE_RGB']).astype(np.uint8)
-    t0 = time.perf_counter()
-    n_cython_draw = 8000
-    gray_tiles = x_train[:n_cython_draw,:].astype(np.float32).reshape(-1, 28, 28)
-    colors = np.array(MPL_CYCLE_COLORS, dtype=np.uint8)
-    locs = locs_px[:n_cython_draw].astype(np.int32)
-    c_labels = labels[:n_cython_draw].astype(np.int32)
-    output = draw_color_tiles_cython(cython_image,
-                                     locs_px=locs,
-                                     gray_tiles=gray_tiles,
-                                     color_labels=c_labels,
-                                     colors=colors)
-    cython_duration = time.perf_counter() - t0
-
 
     fig, ax = plt.subplots(2, 3, figsize=(10, 10))
     ax = ax.flatten()
-    ax[0].imshow(image)
-    ax[0].axis('off')
-    ax[0].set_title("reference:%i images,\nduration:%.3f sec,\nFPS:  %.2f." %
-                    (x_train.shape[0], duration, 1.0/(duration)))
-
-    ax[1].imshow(fast_image)
-    ax[1].axis('off')
-    ax[1].set_title("reference_few: %i images\nduration:%.3f sec,\nFPS:  %.2f." %
-                    (max_per_30fps, fast_duration, 1.0/(fast_duration)))
-
-    ax[2].imshow(vec_image)
-    ax[2].axis('off')
-    ax[2].set_title("vectorized:  %i images,\nduration %.3f sec,\nFPS:  %.2f." %
-                    (n_vec_draw, vec_duration, 1.0/(vec_duration)))
-
-    ax[3].imshow(jax_image)
-    ax[3].axis('off')
-    ax[3].set_title("jax:  %i images,\nduration %.3f sec,\nFPS:  %.2f." %
-                    (n_jax_draw, jax_duration, 1.0/(jax_duration)))
-
-    ax[4].imshow(cython_image)
-    ax[4].axis('off')
-    ax[4].set_title("cython:  %i images,\nduration %.3f sec,\nFPS:  %.2f." %
-                    (n_cython_draw, cython_duration, 1.0/(cython_duration)))
-    
-    for axis in ax:
-        axis.set_xticks([])
-        axis.set_yticks([])
-        # turn off
-        axis.set_frame_on(False)
+    m_fps = _test_and_draw(ax[0], draw_color_tiles_reference)
+    _ = _test_and_draw(ax[1], draw_color_tiles_reference, n_samp=int(m_fps))
+    j_fps = _test_and_draw(ax[2], draw_color_tiles_jax)
+    _ = _test_and_draw(ax[3], draw_color_tiles_jax, n_samp=int(j_fps))
+    c_fps = _test_and_draw(ax[4], draw_color_tiles_cython)
+    _ = _test_and_draw(ax[5], draw_color_tiles_cython, n_samp=int(c_fps))
 
     plt.tight_layout()
     plt.show()
@@ -195,4 +148,4 @@ def test_draw_color_tiles_reference():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    test_draw_color_tiles_reference()
+    speed_comparison()
