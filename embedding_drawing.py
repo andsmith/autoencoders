@@ -1,3 +1,5 @@
+import os
+import sys
 import time
 import numpy as np
 from colors import MPL_CYCLE_COLORS, COLORS, COLOR_SCHEME
@@ -9,7 +11,8 @@ from scipy.spatial import KDTree
 from threading import Lock, Thread
 from color_blit import draw_color_tiles_cython as color_blit
 from util import draw_bbox
-#import keyboard
+# import keyboard
+
 
 class EmbeddingPanZoom(object):
     """
@@ -54,7 +57,7 @@ class EmbeddingPanZoom(object):
 
         self._sample_rate = 1.0  # downsample for display
         self._sample_step = 0.02
-        self._sample = np.arange(self.images_gray.shape[0],dtype=int)
+        self._sample = np.arange(self.images_gray.shape[0], dtype=int)
         self._unused = np.array([], dtype=int)
 
         # logical displayed area:
@@ -93,7 +96,7 @@ class EmbeddingPanZoom(object):
         top_len, bottom_len = pos_xy[1] - self.bbox['y'][0], self.bbox['y'][1] - pos_xy[1]
         self.bbox = {'x': (pos_xy[0] - left_len * zoom_mul, pos_xy[0] + right_len * zoom_mul),
                      'y': (pos_xy[1] - top_len * zoom_mul, pos_xy[1] + bottom_len * zoom_mul)}
-        #logging.info(f"Zooming {direction} at {pos_xy}, new bbox: {self.bbox}, current level: {self._zoom_level}")
+        # logging.info(f"Zooming {direction} at {pos_xy}, new bbox: {self.bbox}, current level: {self._zoom_level}")
 
     def get_frame(self, px_offset=None, color_boxes=None, moused_over=None):
         """
@@ -205,14 +208,14 @@ class EmbeddingPanZoom(object):
         if direction > 0:
             self._shrink_level = min(self._shrink_level + 1, self.tile_size[0] - 2)
         else:
-            self._shrink_level = max(self._shrink_level - 1, 0) 
+            self._shrink_level = max(self._shrink_level - 1, 0)
         logging.info(f"Shrink level now {self._shrink_level}, tile size {self.tile_size[0] - self._shrink_level}")
         # TODO: implement shrinking of tiles (drawing to larger image then scaling down)
 
     def sample(self, direction):
         if direction < 0:
-            self._sample_rate = max(self._sample_step, self._sample_rate -self._sample_step)
-            n_keep =  int(self.images_gray.shape[0]*self._sample_rate)
+            self._sample_rate = max(self._sample_step, self._sample_rate - self._sample_step)
+            n_keep = int(self.images_gray.shape[0]*self._sample_rate)
             self._sample = np.random.choice(self._sample, size=n_keep, replace=False)
         else:
             self._sample_rate = min(1.0, self._sample_rate + self._sample_step)
@@ -259,20 +262,20 @@ class EmbeddingPanZoom(object):
 
 class EmbedTester(object):
     def __init__(self):
-        from tests import load_mnist
-        from load_typographyMNIST import load_numeric
+
         self.size = 1200, 970  # 500,500
-        tiles, labels, embed_xy =  self._get_real_data(load_numeric)  #_make_fake_data(6)#
-        n_sel = 1
-        selected = np.random.choice(labels.size, size=n_sel*2, replace=False) if n_sel * \
-            2 < labels.size else np.arange(labels.size)
-        self._box_colors = {COLOR_SCHEME['a_source']: selected[:1],
-                            COLOR_SCHEME['a_input']: selected[1:2], }
-        # COLOR_SCHEME['a_input']: selected[2:3],
-        # COLOR_SCHEME['a_output']: selected[3:]}
+
+        from embed import LatentRepEmbedder
+        self.embedder = LatentRepEmbedder.from_filename(sys.argv[1])
+
+        self._box_colors = {COLOR_SCHEME['a_source']: [],
+                            COLOR_SCHEME['a_input']: [],
+                            COLOR_SCHEME['a_input']: [],
+                            COLOR_SCHEME['a_output']: []}
+        
         colors = MPL_CYCLE_COLORS
-        self.epz = EmbeddingPanZoom(self.size, embed_xy,
-                                    tiles.reshape((-1, 28, 28)), labels, colors)
+        self.epz = EmbeddingPanZoom(self.size, self.embedder._embedded_train_data,
+                                    self.embedder._images.reshape((-1, 28, 28)), self.embedder._digits, colors)
         self.win_name = "Embedding Pan/Zoom test"
         cv2.namedWindow(self.win_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(self.win_name, self.size[0], self.size[1])

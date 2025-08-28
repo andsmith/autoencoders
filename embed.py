@@ -30,9 +30,10 @@ from color_blit import draw_color_tiles_cython as draw_tiles
 from img_util import make_img as mnist_img
 from tests import load_mnist, load_fashion_mnist
 from load_typographyMNIST import load_alphanumeric, load_numeric
-from load_ae import load_autoencoder
+from load_ae import load_autoencoder, get_ae_dir
 import os
 import pickle
+import re
 
 from pca import PCA
 # Run on each of these:
@@ -42,6 +43,10 @@ LOADERS = {'digits': load_mnist,
            'alphanumeric': lambda **kwargs: load_alphanumeric(**kwargs, numeric_labels=False, subset=['A', 'B', 'C', '1', '2', '3']),
            'fashion': load_fashion_mnist}
 
+def _get_dataset(weights_filename):
+    # from start to first dash/underscore/less-than
+    dataset = re.match(r"^(.*?)[\-_<]", os.path.basename(weights_filename))
+    return dataset.group(1) if dataset else None
 
 class LatentRepEmbedder(object):
     _WORKING_DIR = "embeddings"
@@ -51,7 +56,7 @@ class LatentRepEmbedder(object):
         :param weights_filename: Path to the trained autoencoder weights file  (saved AutoencoderExperiment)
         :param map_size_wh: Size of the map to draw the embeddings on
         """
-        self._dataset = "digits"
+        self._dataset = _get_dataset(weights_filename)
         self._weights_filename = weights_filename
         self._autoencoder = load_autoencoder(self._weights_filename)
         self._type = embedder_class
@@ -75,12 +80,14 @@ class LatentRepEmbedder(object):
 
     @staticmethod
     def from_filename(embed_filename):
+        working_dir = get_ae_dir(embed_filename)
         embed_filename = os.path.basename(embed_filename)
-        wts_file = os.path.splitext(embed_filename)[0]
-        cls_name = os.path.splitext(embed_filename)[1][1:]
-        cls = next((c for c in EMBEDDINGS if c.__name__ == cls_name), None)
+        wts_file = os.path.splitext(os.path.splitext(embed_filename)[0])[0]
+        cls_name = os.path.splitext(os.path.splitext(embed_filename)[0])[1][7:] # remove ".embed-" from extension to get embedder class name
+        cls = next((c for c in EMBEDDINGS if c().get_name() == cls_name), None)  # TODO: fix...
         if cls is None:
             raise ValueError(f"Unknown embedding class: {cls_name}")
+        wts_file = os.path.join(working_dir, wts_file)
         return LatentRepEmbedder(cls, wts_file)
 
     def save(self):
@@ -98,6 +105,7 @@ class LatentRepEmbedder(object):
         filename = filename if filename is not None else self.get_filename()
         if not os.path.exists(filename):
             return False
+        logging.info("Loading embedding from %s ...", filename)
         with open(filename, 'rb') as f:
             load_data = pickle.load(f)
         self._embedder = load_data['embedder']

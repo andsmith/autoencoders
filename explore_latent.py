@@ -1,10 +1,31 @@
+"""
+main_app:
++-------------------------------+-----------+
+| Embedding pan/zoom            |mouseover  |
+|  nothing selected:            |info area  |   
+|   -mouseover/select sam1 ,    |   [img]   |
+|   -then sam2 to form vector.  |           |
+|   -mouseover 3rd, complete    | disp ctrl |
+|    analogy, disp below.       | 0 1 2 3 4 |  <- char select/deselect
++-------------------------------+           |
+|    Analogy display            | <density> |
+| [sam1]----------->[sam2]      +-----------+ <- selected sample, concept vector
+| [s3]->[a0]->[a1]->[a2]-->[a3] |           | <- Initial sample (s3), partial analogy interpolations (a0, a1),
++-------------------------------+-----------+    full analogy (a2), and extrapolation (a3)
+"""
+
 import cv2
 import numpy as np
 import logging
-from embedding_render import MNISTEmbedRenderer
 from embeddings import PassThroughEmbedding, PCAEmbedding, TSNEEmbedding, UMAPEmbedding
 from mnist import MNISTData
 import time
+from enum import IntEnum
+from abc import ABC, abstractmethod
+
+
+from windows import EmbedWindow, InfoWindow, AnalogyWindow
+
 
 
 class PanZoomEmbedding(object):
@@ -85,7 +106,6 @@ class PanZoomEmbedding(object):
         elif event == cv2.EVENT_LBUTTONUP or event == cv2.EVENT_RBUTTONUP:
             self.mouse_info['button_held'] = None
             self.mouse_info['clicked_pos'] = None
-
 
 
 def test_get_bbox():
