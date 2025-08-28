@@ -28,6 +28,7 @@ def get_ae_dir(weights_filename):
     base_name = os.path.basename(weights_filename)
     match = re.match(r"^[^\-_]+[\-_](.+?)\(", base_name)
     class_name = match.groups(0)[0] if match else None
+    class_name = class_name.replace('-TORCH', '')
     # Matches start of experiments:
     for exp_dir in AUTOENCODERS.keys():
         if exp_dir.startswith(class_name):

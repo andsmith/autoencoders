@@ -54,11 +54,15 @@ class EmbeddingPanZoom(object):
         # zoom controls view window:
         self._zoom_rate = 1.1
         self._zoom_level = 1.0  # current zoom level
-
-        self._sample_rate = 1.0  # downsample for display
+        n_tiles = self.images_gray.shape[0]
         self._sample_step = 0.02
+        self._sample_rate = min(1.0, max(self._sample_step, 50000 / n_tiles)) # downsample for display
+        logging.info(f"Initial sample rate {self._sample_rate}, showing {int(n_tiles*self._sample_rate)} tiles.")
         self._sample = np.arange(self.images_gray.shape[0], dtype=int)
         self._unused = np.array([], dtype=int)
+        if self._sample_rate<1.0:
+            self._sample = np.random.choice(self._sample, size=int(n_tiles*self._sample_rate), replace=False)
+            self._unused = np.setdiff1d(self._unused, self._sample)
 
         # logical displayed area:
         self.bbox = {'x': (0.0, 1.0), 'y': (0.0, 1.0)}
@@ -263,22 +267,24 @@ class EmbeddingPanZoom(object):
 class EmbedTester(object):
     def __init__(self):
 
-        self.size = 1200, 970  # 500,500
+        self._size = 1920, 1000  # 500,500
+        self.size = (np.array([1920, 1000]) * 1.0).astype(int)
 
         from embed import LatentRepEmbedder
+        self.samples = []
         self.embedder = LatentRepEmbedder.from_filename(sys.argv[1])
 
         self._box_colors = {COLOR_SCHEME['a_source']: [],
-                            COLOR_SCHEME['a_input']: [],
+                            COLOR_SCHEME['a_dest']: [],
                             COLOR_SCHEME['a_input']: [],
                             COLOR_SCHEME['a_output']: []}
-        
+        self._box_fill_seq = ['a_source', 'a_dest','a_input']
         colors = MPL_CYCLE_COLORS
         self.epz = EmbeddingPanZoom(self.size, self.embedder._embedded_train_data,
                                     self.embedder._images.reshape((-1, 28, 28)), self.embedder._digits, colors)
         self.win_name = "Embedding Pan/Zoom test"
         cv2.namedWindow(self.win_name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(self.win_name, self.size[0], self.size[1])
+        #cv2.resizeWindow(self.win_name, self.size[0], self.size[1])
         cv2.setMouseCallback(self.win_name, self._mouse_callback)
 
     def _get_real_data(self, load_fn, n_max=2000):
@@ -293,6 +299,48 @@ class EmbedTester(object):
         x_embed = pca.fit_embed(tiles)
         return tiles, labels, x_embed
 
+    def _set_sample(self, index):
+        self.samples.append(index)
+        box_name = self._box_fill_seq[len(self.samples) - 1]
+        box_color= COLOR_SCHEME[box_name]
+        self._box_colors[box_color].append(index)
+        self.epz._frame = None  # force redraw
+        if len(self.samples) == 3:
+            self._do_analogy()
+
+    def _pop_sample(self):
+        if self.samples:
+            index = self.samples.pop()
+            box_name = self._box_fill_seq[len(self.samples)]
+            box_color= COLOR_SCHEME[box_name]
+            self._box_colors[box_color].remove(index)
+            self.epz._frame = None  # force redraw
+            
+    def _do_analogy(self):
+        #import ipdb; ipdb.set_trace()
+        a_source_code = self.embedder._codes[self.samples[0]]
+        a_dest_code = self.embedder._codes[self.samples[1]]
+        a_input_code = self.embedder._codes[self.samples[2]]
+        a_output_code = a_input_code + (a_dest_code - a_source_code)
+        # Perform analogy operation here
+        a_source_img = self.embedder._images[self.samples[0]]   
+        a_dest_img = self.embedder._images[self.samples[1]]
+        a_input_img = self.embedder._images[self.samples[2]]
+        a_output_img = self.embedder._autoencoder.decode_samples(a_output_code.reshape(1,-1))
+        fig, ax = plt.subplots(2,2)
+        ax = ax.flatten()
+
+        ax[0].imshow(a_source_img.squeeze().reshape(28,28), cmap='gray')
+        ax[0].set_title('A')
+        ax[1].imshow(a_dest_img.squeeze().reshape(28,28), cmap='gray')
+        ax[1].set_title('AA')
+        ax[2].imshow(a_input_img.squeeze().reshape(28,28), cmap='gray')
+        ax[2].set_title('B')
+        ax[3].imshow(a_output_img.squeeze().reshape(28,28), cmap='gray')
+        ax[3].set_title('??')
+        fig.suptitle('Analogy: A is to AA as B is to ??', fontsize=16)
+        plt.show()
+
     def run(self):
 
         self._click_px = None
@@ -300,6 +348,8 @@ class EmbedTester(object):
         self._moused_over = None  # index into points
 
         while True:
+            # if not np.all([len(self._box_colors[color]) == 0 for color in self._box_colors]):
+            #     import ipdb; ipdb.set_trace()
             frame = self.epz.get_frame(self._pan_offset, moused_over=self._moused_over, color_boxes=self._box_colors)
             cv2.imshow(self.win_name, frame[:, :, ::-1])
             k = cv2.waitKey(1)
@@ -315,11 +365,15 @@ class EmbedTester(object):
             elif k & 0xFF == ord('\''):
                 self.epz.sample(1)
 
+            elif k & 0xFF == ord('c'):
+                self._pop_sample()
+
     def _mouse_callback(self, event, x, y, flags, param):
         pos_px = np.array((x, y))
         if event == cv2.EVENT_LBUTTONDOWN:
             self._click_px = pos_px
-            self._moused_over = None
+            if self._moused_over is not None:
+                self._set_sample(self._moused_over)
 
         elif event == cv2.EVENT_LBUTTONUP:
             self._click_px = None
@@ -362,5 +416,5 @@ def test_mouseover():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    test_mouseover()
+    #test_mouseover()
     EmbedTester().run()
