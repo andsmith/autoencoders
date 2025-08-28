@@ -23,7 +23,7 @@ MPL_CYCLE_COLORS = [(31, 119, 180),
                     (188, 189, 34),
                     (150, 150, 150),
                     (44, 160, 44),
-                    (0, 4, 51)]
+                    (0, 4, 51)] * 10
 
 # analogy_source : analogy_dest :: analogy_input : analogy_output
 COLOR_SCHEME = {'mouseover': COLORS['NEON_GREEN'],

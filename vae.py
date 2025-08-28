@@ -181,20 +181,12 @@ class VAEExperiment(AutoencoderExperiment):
         return root
 
     @staticmethod
-    def from_filename(filename, dataset):
-        filename = os.path.basename(filename)
-        dataset = re.escape(dataset)
-        match = re.match(
-            fr"{dataset}_VAE-TORCH\(pca=(\d+)_hidden=([\d\-]+)_d-latent=(\d+)_reg-lambda=(\d+\.\d+)\)", filename)
-        if not match:
-            raise ValueError(f"Filename {filename} is not in the expected format.")
-
-        pca_dims = int(match.group(1))
-        enc_layers = list(map(int, match.group(2).split('-')))
-        d_latent = int(match.group(3))
-        reg_lambda = float(match.group(4))
-        return VAEExperiment(pca_dims=pca_dims, enc_layers=enc_layers, d_latent=d_latent,
-                             reg_lambda=reg_lambda)
+    def from_filename(filename):
+        
+        params = VAEExperiment.parse_filename( os.path.basename(filename))
+        network = VAEExperiment(**params)
+        network.load_weights(filename)
+        return network
 
     def _init_model(self):
         dec_layers = self.enc_layer_desc[::-1] if self.dec_layer_desc is None else self.dec_layer_desc
@@ -314,7 +306,7 @@ class VAEExperiment(AutoencoderExperiment):
         filename = self.get_name(file_kind='weights') if filename is None else filename
         self.model.load_state_dict(torch.load(filename, map_location=self.device, weights_only=True))
         logging.info("Loaded model weights from %s", filename)
-        hist_filename = self.get_name(file_kind='history')
+        hist_filename = self.get_name(file_kind='history') if filename is None else "%s.history.pkl" % (os.path.splitext(filename)[0])
         with open(hist_filename, 'r') as f:
             self._history_dict.update(json.load(f))
         logging.info("Loaded model history from %s", hist_filename)
@@ -546,11 +538,96 @@ class VAEExperiment(AutoencoderExperiment):
             draw_band(ax, i, band_colors[i], label)
         # ax.legend(loc='upper center', fontsize=10)
 
-    # Add plotting methods as needed to match DenseExperiment
     @staticmethod
     def parse_filename(filename):
-        return {}
+        """
+        Parse the filename to extract experiment parameters.
+        :returns: dict with network architecture parameters, can be passed as a set of arguments to VAEExperiment().
+        """
+        print("\n%s\n" % filename)
+        file = os.path.split(os.path.abspath(filename))[1]
+        dataset_pattern = r'([a-z]+)[_\-]([a-zA-Z\-\_]+)'
 
+        # internal structure is everything between outer parentheses
+        int_start, int_end = file.find("("), len(file)-file[::-1].find(")")
+
+        internal = file[int_start:int_end]  # keep parentheses
+        prefix = file[:int_start]
+
+        pca_vs_rest_pattern = r'(digits-)?PCA\(([^\)]+)\)_(.+)'  # dataset-pca(pca_params)
+        # PCA format is "<dims>,<whitening>" where <dims> is an int, and <whitening> is "W" or "UW"
+        pca_int_pattern = r'(\d+),(W|UW)'
+        # ints separated by dash, final is code size (must have at least 1 number here)
+        enc_pattern = r'Encoder-(.+?)[^\d-]'
+        # optional, same format, assumed reverse of encoder if not present, l=layer (of encoder unit, can't be final/code layer), r=rate.
+        dec_pattern = r'Decoder-([0-9\-]+)'
+        dropout_pattern = r'Drop\(l=(\d+),r=(\d\.?\d*)\)'
+        reg_lambda_pattern = r'RegLambda=(\d+\.\d+)'
+        d_latent_pattern = r'Dlatent=(\d+)'
+        file_kind_match = re.search(dataset_pattern, prefix)
+        if not file_kind_match:
+            raise ValueError("No dataset_model string found in filename: %s, in prefix: %s" % (filename, prefix))
+        dataset, vae = file_kind_match.groups()
+        if vae != 'VAE-TORCH':
+            raise ValueError("Expected 'VAE-TORCH' in dataset_model string, found: %s" % vae)
+
+        pca_match = re.search(pca_vs_rest_pattern, internal)
+        if not pca_match:
+            raise ValueError("No PCA match found in filename: %s, in params: %s" % (filename, internal))
+        pca_desc, arch_desc = pca_match.group(2), pca_match.group(3)
+        pca_int_match = re.search(pca_int_pattern, pca_desc)
+        if not pca_int_match:
+            raise ValueError("No PCA integer match found in filename: %s, in params: %s" % (filename, pca_desc))
+        dims, whiten = int(pca_int_match.group(1)), pca_int_match.group(2) == 'W'
+
+        encoder_match = re.search(enc_pattern, arch_desc)
+        if encoder_match:
+            enc_layers = tuple(map(int, encoder_match.group(1).split('-')))
+        else:
+            raise ValueError("No encoder description 'units=...' found in filename: %s, in params: %s" %
+                             (filename, arch_desc))
+
+        decoder_match = re.search(dec_pattern, arch_desc)
+
+        if decoder_match:
+            dec_layers = tuple(map(int, decoder_match.group(1).split('-')))
+            logging.info("##################Found explicit decoder layer: %s", dec_layers)
+        else:
+            dec_layers = enc_layers[::-1]  # reverse of encoder, minus code layer
+            logging.info("No decoder layer found, using reverse of encoder: %s", dec_layers)
+            
+
+        d_latent_match = re.search(d_latent_pattern, arch_desc)
+        if d_latent_match:
+            d_latent = int(d_latent_match.group(1))
+        else:
+            d_latent = None
+
+        reg_lambda_match = re.search(reg_lambda_pattern, arch_desc)
+        if reg_lambda_match:
+            reg_lambda = float(reg_lambda_match.group(1))
+        else:
+            reg_lambda = None
+
+        dropout_match = re.search(dropout_pattern, arch_desc)
+        if dropout_match:
+            dropout_info = dict(layer=int(dropout_match.group(1)),
+                                rate=float(dropout_match.group(2)))
+        else:
+            dropout_info = None
+
+        params = {
+            'enc_layers': list(enc_layers),
+            'd_latent': d_latent,
+            'reg_lambda': reg_lambda,
+            'pca_dims': 0 if dims == 784 else dims,
+            'whiten_input': whiten,
+            'dropout_info': dropout_info,
+            'dec_layers': list(dec_layers),
+            'dataset': dataset
+        }
+
+        return params
 def vae_demo():
     args = VAEExperiment.get_args("Train a variational autoencoder on MNIST data.",
                                   extra_args=[

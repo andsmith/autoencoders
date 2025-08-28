@@ -142,9 +142,10 @@ class DenseExperiment(AutoencoderExperiment):
 
         if decoder_match:
             dec_layers = tuple(map(int, decoder_match.group(1).split('-')))
+            logging.info("##################Found explicit decoder layer: %s", dec_layers)
         else:
-            dec_layers = None
-            
+            dec_layers = enc_layers[:-1][::-1]  # reverse of encoder, minus code layer
+            logging.info("-----------------------------No decoder layer found, using reverse of encoder: %s", dec_layers)
 
         dropout_match = re.search(dropout_pattern, arch_desc)
         if dropout_match:

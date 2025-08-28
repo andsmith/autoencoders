@@ -82,9 +82,9 @@ class LatentRepEmbedder(object):
     def from_filename(embed_filename):
         working_dir = get_ae_dir(embed_filename)
         embed_filename = os.path.basename(embed_filename)
-        wts_file = os.path.splitext(os.path.splitext(embed_filename)[0])[0]
-        cls_name = os.path.splitext(os.path.splitext(embed_filename)[0])[1][7:] # remove ".embed-" from extension to get embedder class name
-        cls = next((c for c in EMBEDDINGS if c().get_name() == cls_name), None)  # TODO: fix...
+        wts_file = re.search(r'^(.*?)[\.\_]embed-', embed_filename).group(1)
+        cls_name = re.search(r'embed-(.+).pkl', embed_filename).group(1).upper().replace('-','')
+        cls = next((c for c in EMBEDDINGS if c().get_name().upper().replace('-','') == cls_name), None)  # TODO: fix...
         if cls is None:
             raise ValueError(f"Unknown embedding class: {cls_name}")
         wts_file = os.path.join(working_dir, wts_file)
