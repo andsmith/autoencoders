@@ -27,7 +27,7 @@ class EmbeddingPanZoom(object):
     """
     _MAX_TILES_PER_UPDATE = 8000
 
-    def __init__(self, size, embed_xy, images_gray, labels, colors=None, bg_color=None):
+    def __init__(self, size, embed_xy, images_gray, labels, image_colors=None):
         """
         Initialize the EmbeddingPanZoom object.
 
@@ -35,12 +35,10 @@ class EmbeddingPanZoom(object):
         :param embed_xy: N x 2 array of embedded (x, y) coordinates, in the unit square (to fill image @ full zoom).
         :param images_gray: List of N grayscale images corresponding to the embeddings
         :param labels: List of labels for the embeddings (strings)
-        :param colors: List of C colors for the embeddings, where C is the number of unique labels and each 
+        :param image_colors: List of C colors for the embeddings, where C is the number of unique labels and each 
                        color is an (r,g,b)-tuple of ints in [0, 255]
-        :param bg_color: Background color for the embedding image, (r,g,b) ints in [0, 255]
-        :param zoom_level:  Magnification factor (1.0 puts all points in view, larger zooms in)
         """
-        self.bg_color = np.array((bg_color or COLORS['OFF_WHITE_RGB']), dtype=np.uint8)
+        self.bg_color = np.array((COLOR_SCHEME['bkg']), dtype=np.uint8)
         self.size = size
         self.images_gray = np.array(images_gray).astype(np.float32)  # N x H x W
         self.tile_size = np.array((self.images_gray.shape[2], self.images_gray.shape[1]))
@@ -59,9 +57,9 @@ class EmbeddingPanZoom(object):
 
         self.labels = labels
         self.label_classes = sorted(list(set(labels)))
-        
+
         self.int_labels = np.array([self.label_classes.index(lbl) for lbl in labels])
-        self.colors = colors if colors is not None else (
+        self.colors = image_colors if image_colors is not None else (
             np.array(sns.color_palette("husl", len(self.label_classes)))*255.0).astype(int).tolist()
         self.colors = np.array(self.colors, dtype=np.uint8)
         self._update_lock = Lock()
@@ -89,7 +87,7 @@ class EmbeddingPanZoom(object):
                      'y': (pos_xy[1] - top_len * zoom_mul, pos_xy[1] + bottom_len * zoom_mul)}
         logging.info(f"Zooming {direction} at {pos_xy}, new bbox: {self.bbox}, current level: {self._zoom_level}")
 
-    def get_frame(self, px_offset=None, boxed=None, moused_over=None):
+    def get_frame(self, px_offset=None, color_boxes=None, moused_over=None):
         """
         Get the current frame for display.
         :param px_offset: Pixel offset to apply to the frame, user has dragged the view by this many pixels,
@@ -98,24 +96,15 @@ class EmbeddingPanZoom(object):
         :param boxed:  Dict w/ colors as keys, list indices into tiles to draw boxes around in each color as values
         :param moused_over:  Which tile(s) are currently being hovered over, drawn in mouseover color.
         """
+        px_offset = (0, 0) if px_offset is None else px_offset  
         if not np.all(self._last_offset_px == px_offset) or self._frame is None:
-            self._frame = self._make_frame(bbox=self._get_bbox(px_offset))
+            self._frame = self._make_frame(px_offset, color_boxes=color_boxes, moused_over=moused_over)
             self._last_offset_px = px_offset
         frame_out = self._frame.copy()
-        boxed = {} if boxed is None else boxed
-        px_offset = np.array(px_offset if px_offset is not None else (0, 0), dtype=np.int32)
-        def _draw_box_around_tile(ind, color, thickness):
-            bbox_upper_left = self._embed_to_pixel(self.embed_xy[ind])[0]
-            bbox = {'x': (bbox_upper_left[0] + px_offset[0], bbox_upper_left[0] + self.tile_size[0] + px_offset[0]),
-                    'y': (bbox_upper_left[1] + px_offset[1], bbox_upper_left[1] + self.tile_size[1] + px_offset[1])}
-            draw_bbox(frame_out, bbox, color=color, thickness=thickness,inside=False)
 
-        for box_color, boxed_inds in boxed.items():
-            for ind in boxed_inds:
-                _draw_box_around_tile(ind, box_color, thickness=2)
-
+        
         if moused_over is not None:
-            _draw_box_around_tile(moused_over, color=COLOR_SCHEME['mouseover'], thickness=3)
+            self._draw_box_around_tile(frame_out, moused_over, color=COLOR_SCHEME['mouseover'], thickness=3)
 
         return frame_out
 
@@ -131,9 +120,9 @@ class EmbeddingPanZoom(object):
         :param pos_px:  (x,y) pixel coordinates of the mouse position
         :return:  index (or list of indices) of the point(s) moused over, or None if none
         """
-        pos_px -= self.tile_size //2 # querying from tile corners
-        pos_embed = self._pixel_to_embed(pos_px)  
-        query_shift = self._zoom_level * self.tile_size / self.size /2
+        pos_px -= self.tile_size // 2  # querying from tile corners
+        pos_embed = self._pixel_to_embed(pos_px)
+        query_shift = self._zoom_level * self.tile_size / self.size / 2
         _, inds = self._tree.query(pos_embed+query_shift, k=1)
         if inds.size > 0:
             sample_pos_px = self._embed_to_pixel(self.embed_xy[inds])[0]
@@ -152,7 +141,7 @@ class EmbeddingPanZoom(object):
 
         x_shift = px_offset[0] * self._zoom_level / self.size[0]
         y_shift = px_offset[1] * self._zoom_level / self.size[1]
-        
+
         new_bbox = {
             'x': (self.bbox['x'][0] - x_shift, self.bbox['x'][1] - x_shift),
             'y': (self.bbox['y'][0] - y_shift, self.bbox['y'][1] - y_shift)
@@ -172,7 +161,7 @@ class EmbeddingPanZoom(object):
         bbox_width, bbox_height = bbox['x'][1] - bbox['x'][0], bbox['y'][1] - bbox['y'][0]
         img_coords = np.array(locs).reshape(-1, 2) - np.array((bbox['x'][0], bbox['y'][0]))
         img_coords /= np.array((bbox_width, bbox_height))  # now in unit square
-        img_coords = img_coords * self.size  - self.tile_size/2# scaled up and centered
+        img_coords = img_coords * self.size - self.tile_size/2  # scaled up and centered
         return (img_coords.round()).astype(int)
 
     def _pixel_to_embed(self, locs_px, bbox=None):
@@ -197,39 +186,57 @@ class EmbeddingPanZoom(object):
             (self.embed_xy[:, 1] >= bbox['y'][0]) & (self.embed_xy[:, 1] < bbox['y'][1])
         return mask
 
-    def _make_frame(self, bbox):
+    def _make_frame(self, px_offset, color_boxes=None, moused_over=None):
         """
         Create a new frame for the current view.
         """
+        bbox=self._get_bbox(px_offset)
         frame = self._blank.copy()
-        valid_mask = self._get_valid_tiles(bbox)
-        color_labels = self.int_labels[valid_mask]
-        images = self.images_gray[valid_mask]
+        valid_inds = np.where(self._get_valid_tiles(bbox))[0]
+        color_labels = self.int_labels[valid_inds]
+        images = self.images_gray[valid_inds]
 
         # check nothing overlaps
-        embed_locs = self._embed_to_pixel(self.embed_xy[valid_mask], bbox=bbox)  
-        #print(embed_locs)
-        valid_mask = ((embed_locs[:, 0] >= 0) & (embed_locs[:, 0] < self.size[0] - self._pad_size[0]) &
-                      (embed_locs[:, 1] >= 0) & (embed_locs[:, 1] < self.size[1] - self._pad_size[1]))
+        embed_locs = self._embed_to_pixel(self.embed_xy[valid_inds], bbox=bbox).reshape(-1,2)
+        valid_mask = (((embed_locs[:, 0] >= 0) & (embed_locs[:, 0] < self.size[0] - self._pad_size[0]) &
+                      (embed_locs[:, 1] >= 0) & (embed_locs[:, 1] < self.size[1] - self._pad_size[1])))
+        valid_inds = valid_inds[valid_mask]
         embed_locs = embed_locs[valid_mask]
         images = images[valid_mask]
         color_labels = color_labels[valid_mask]
-
         color_blit(frame, embed_locs, images, color_labels, self.colors)
+        boxed = {} if color_boxes is None else color_boxes
+        valid_inds = set(valid_inds.tolist())
+        for box_color, boxed_inds in boxed.items():
+            for ind in boxed_inds:
+                if ind in valid_inds:
+                    self._draw_box_around_tile(frame, ind, box_color, thickness=2, offset=px_offset)
         return frame
 
 
+    def _draw_box_around_tile(self, frame, ind, color, thickness, offset=(0,0)):
+        bbox_upper_left = self._embed_to_pixel(self.embed_xy[ind])[0]
+        bbox = {'x': (bbox_upper_left[0]+offset[0], bbox_upper_left[0] + self.tile_size[0]+offset[0]),
+                'y': (bbox_upper_left[1]+offset[1], bbox_upper_left[1] + self.tile_size[1]+offset[1])}
+        if color[0]>200:
+            print(bbox)
+        draw_bbox(frame, bbox, color=color, thickness=thickness, inside=False)
+
 class EmbedTester(object):
     def __init__(self):
-        tiles, labels, embed_xy = _make_fake_data()#self._get_real_data()
-        n_sel = 2
-        selected = np.random.choice(labels.size,size=n_sel*2, replace=False)
-        self._box_colors = {COLOR_SCHEME['a_source']: selected[:n_sel],
-                            COLOR_SCHEME['a_dest']: selected[n_sel:]}
+        from tests import load_mnist
+        from load_typographyMNIST import load_numeric
+        self.size = 1200,970  # 500,500
+        tiles, labels, embed_xy =  self._get_real_data(load_numeric)  #_make_fake_data(6)#
+        n_sel = 20
+        selected = np.random.choice(labels.size, size=n_sel*2, replace=False) if n_sel*2<labels.size else np.arange(labels.size)
+        self._box_colors = {COLOR_SCHEME['a_source']: selected[:1],
+                            COLOR_SCHEME['a_input']: selected[1:2],}
+                            # COLOR_SCHEME['a_input']: selected[2:3],
+                            # COLOR_SCHEME['a_output']: selected[3:]}
 
         print(self._box_colors)
 
-        self.size = 1200, 970
         colors = MPL_CYCLE_COLORS
         self.epz = EmbeddingPanZoom(self.size, embed_xy,
                                     tiles.reshape((-1, 28, 28)), labels, colors)
@@ -238,14 +245,15 @@ class EmbedTester(object):
         cv2.resizeWindow(self.win_name, self.size[0], self.size[1])
         cv2.setMouseCallback(self.win_name, self._mouse_callback)
 
-    def _get_real_data(self):
+    def _get_real_data(self, load_fn, n_max=1000):
 
-        from tests import load_mnist
         from embeddings import PCAEmbedding
         pca = PCAEmbedding()
 
-        (tiles, labels), _ = load_mnist()
-        
+        (tiles, labels), _ = load_fn()
+        if n_max is not None:
+            tiles = tiles[:n_max]
+            labels = labels[:n_max]
         x_embed = pca.fit_embed(tiles)
         return tiles, labels, x_embed
 
@@ -256,8 +264,8 @@ class EmbedTester(object):
         self._moused_over = None  # index into points
 
         while True:
-            frame = self.epz.get_frame(self._pan_offset, moused_over=self._moused_over,boxed=self._box_colors)
-            cv2.imshow(self.win_name, frame[:,:,::-1])
+            frame = self.epz.get_frame(self._pan_offset, moused_over=self._moused_over, color_boxes=self._box_colors)
+            cv2.imshow(self.win_name, frame[:, :, ::-1])
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
@@ -283,27 +291,28 @@ class EmbedTester(object):
             self.epz.zoom_at(direction, pos_px=pos_px)
 
 
-def _make_fake_data():
+def _make_fake_data(n=6):
     embed_locs_xy = np.array([(0.1, 0.1), (0.9, 0.1), (0.1, 0.9), (0.6, 0.6), (0.5, 0.5), (0.9, 0.9)])
     n_tiles = embed_locs_xy.shape[0]
-    labels = np.array(["%i"%(l%2,) for l in range(n_tiles)])
+    labels = np.array(["%i" % (l % 2,) for l in range(n_tiles)])
 
     tile_size = 28
     tiles = np.random.rand(tile_size**2 * n_tiles).reshape((n_tiles, tile_size, tile_size))
-    
-    return tiles, labels, embed_locs_xy
+
+    return tiles[:n], labels[:n], embed_locs_xy[:n]
 
 
 def test_mouseover():
     tiles, labels, embed_locs_xy = _make_fake_data()
-    colors = np.array(((0, 128,128), (0, 255, 0)))
-    epz = EmbeddingPanZoom((150, 150), embed_locs_xy, tiles, labels, colors=colors)
-    p1=(75, 75)
+    colors = np.array(((0, 128, 128), (0, 255, 0)))
+    epz = EmbeddingPanZoom((150, 150), embed_locs_xy, tiles, labels, colors)
+    p1 = (75, 75)
     mo = epz.get_moused_over(p1)
     assert mo is not None and mo == 4, f"Expected to mouse over center tile, got {mo}"
-    p2=(85, 94)
+    p2 = (85, 94)
     mo = epz.get_moused_over(p2)
     assert mo is not None and mo == 3, f"Expected to mouse over bottom-left tile, got {mo}"
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
