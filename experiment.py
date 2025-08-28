@@ -116,7 +116,7 @@ class AutoencoderExperiment(ABC):
         pass
 
     @abstractmethod
-    def load_weights(self):
+    def load_weights(self,filename=None):
         pass
 
     @staticmethod

@@ -112,7 +112,7 @@ class DenseExperiment(AutoencoderExperiment):
         # ints separated by dash, final is code size (must have at least 1 number here)
         enc_pattern = r'units=(.+?)[^\d-]'
         # optional, same format, assumed reverse of encoder if not present, l=layer (of encoder unit, can't be final/code layer), r=rate.
-        dec_pattern = r'dec_units=(.?)'
+        dec_pattern = r'dec-units=([0-9\-]+)'
         dropout_pattern = r'Drop\(l=(\d+),r=(\d\.?\d*)\)'
 
         file_kind_match = re.search(kind_pattern, prefix)
@@ -139,15 +139,17 @@ class DenseExperiment(AutoencoderExperiment):
                              (filename, arch_desc))
 
         decoder_match = re.search(dec_pattern, arch_desc)
+
         if decoder_match:
             dec_layers = tuple(map(int, decoder_match.group(1).split('-')))
         else:
             dec_layers = None
+            
 
         dropout_match = re.search(dropout_pattern, arch_desc)
         if dropout_match:
-            dropout_info = dict(dropout_layer=int(dropout_match.group(1)),
-                                dropout_rate=float(dropout_match.group(2)))
+            dropout_info = dict(layer=int(dropout_match.group(1)),
+                                rate=float(dropout_match.group(2)))
         else:
             dropout_info = None
 
@@ -157,7 +159,7 @@ class DenseExperiment(AutoencoderExperiment):
             'pca_dims': 0 if dims == 784 else dims,
             'whiten_input': whiten,
             'dropout_info': dropout_info,
-            'dec_layers': dec_layers,
+            'dec_layers': list(dec_layers),
             'dataset': dataset
         }
 
@@ -252,23 +254,32 @@ class DenseExperiment(AutoencoderExperiment):
             json.dump(self._history_dict, f)
         logging.info("Training history saved to %s", os.path.join(path, hist))
 
-    def load_weights(self):
-        filename = self.get_name(file_ext='weights')
+    def load_weights(self, filename=None):
+        self_filename = self.get_name(file_ext='weights')
+        if filename is not None and filename != self_filename:
+            logging.warning("Loading weights a file different from model descrption string, compare:\n\t%s\n\t%s",
+                            filename, self_filename)
+        else:
+            filename =  self_filename
+            
         if os.path.exists(filename):
             self.autoencoder.load_weights(filename)
             logging.info("Model weights loaded from %s", filename)
 
-            hist = self.get_name(file_ext='history')
-            hist_path = self.get_name(file_ext='history')
-            if os.path.exists(hist_path):
-                with open(hist_path, 'r') as f:
-                    self._history_dict = json.load(f)
-                logging.info("Training history loaded from %s", hist_path)
-            else:
-                self._history_dict = None
-                logging.info("No training history found at %s", hist_path)
+            self._history_dict = self._load_history(filename)
         else:
             raise FileNotFoundError(f"Model weights file {filename} not found.")
+        
+    def _load_history(self, filename):
+        hist_path = "%shistory.json" % (os.path.splitext(os.path.splitext(filename)[0])[0])
+        if os.path.exists(hist_path):
+            with open(hist_path, 'r') as f:
+                history_dict = json.load(f)
+            logging.info("Training history loaded from %s", hist_path)
+        else:
+            history_dict = None
+            logging.info("No training history found at %s", hist_path)
+        return history_dict
 
     @staticmethod
     def from_filename(filename):
@@ -276,7 +287,7 @@ class DenseExperiment(AutoencoderExperiment):
         logging.info("Loading DenseExperiment from filename: %s", filename)
         params = DenseExperiment.parse_filename(filename)
         network = DenseExperiment(**params)
-        network.load_weights()
+        network.load_weights(filename)
         return network
 
     def _attempt_resume(self):

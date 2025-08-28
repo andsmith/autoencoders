@@ -26,86 +26,127 @@ from util import PointSet2d
 from colors import COLORS, MPL_CYCLE_COLORS
 import argparse
 from color_blit import draw_color_tiles_cython as draw_tiles
-#from load_ae import load_autoencoder
+# from load_ae import load_autoencoder
 from img_util import make_img as mnist_img
 from tests import load_mnist, load_fashion_mnist
 from load_typographyMNIST import load_alphanumeric, load_numeric
-
+from load_ae import load_autoencoder
+import os
+import pickle
 
 from pca import PCA
 # Run on each of these:
-EMBEDDINGS = [ PCAEmbedding,TSNEEmbedding, UMAPEmbedding]  # UMAPEmbedding, RandomProjectionEmbedding,
+EMBEDDINGS = [PCAEmbedding, TSNEEmbedding, UMAPEmbedding]  # UMAPEmbedding, RandomProjectionEmbedding,
 LOADERS = {'digits': load_mnist,
            'numeric': load_numeric,
-           'alphanumeric': lambda **kwargs: load_alphanumeric(**kwargs, numeric_labels=False,subset = ['A', 'B', 'C', '1', '2', '3']),
+           'alphanumeric': lambda **kwargs: load_alphanumeric(**kwargs, numeric_labels=False, subset=['A', 'B', 'C', '1', '2', '3']),
            'fashion': load_fashion_mnist}
 
 
 class LatentRepEmbedder(object):
-    def __init__(self, embedders, weights_filename, map_size_wh=(4096, 4096)):
+    _WORKING_DIR = "embeddings"
+
+    def __init__(self, embedder_class, weights_filename):
         """
         :param weights_filename: Path to the trained autoencoder weights file  (saved AutoencoderExperiment)
         :param map_size_wh: Size of the map to draw the embeddings on
         """
         self._dataset = "digits"
-        self._map_size_wh = map_size_wh
         self._weights_filename = weights_filename
-        self._autoencoder = self._load_autoencoder()
-        self._embedders = embedders
-        self._codes, self._digits, self._images = self._encode_data()
-        self._embedded_train_data, self._embed_files = self._calc_embeddings()
+        self._autoencoder = load_autoencoder(self._weights_filename)
+        self._type = embedder_class
+        self._images = self._autoencoder.x_train
+        self._digits = self._autoencoder.y_train
+        logging.info("Initializing Embedding of type: %s", self._type.__name__)
+        if not self.load():
+
+            logging.info("Didn't find encoding, creating new one...")
+            self._codes = self._encode_data()
+            self._embedder, self._embedded_train_data = self._calc_embedding()
+            self.save()
+        
+
         self._draw_maps()
 
-    def _load_autoencoder(self):
-        return load_autoencoder(self._weights_filename)
+    def get_filename(self):
+        wts_base = os.path.basename(self._weights_filename)
+        cls_name = self._type().get_name()
+        return os.path.join(LatentRepEmbedder._WORKING_DIR, f"{wts_base}.embed-{cls_name}" + ".pkl")
+
+    @staticmethod
+    def from_filename(embed_filename):
+        embed_filename = os.path.basename(embed_filename)
+        wts_file = os.path.splitext(embed_filename)[0]
+        cls_name = os.path.splitext(embed_filename)[1][1:]
+        cls = next((c for c in EMBEDDINGS if c.__name__ == cls_name), None)
+        if cls is None:
+            raise ValueError(f"Unknown embedding class: {cls_name}")
+        return LatentRepEmbedder(cls, wts_file)
+
+    def save(self):
+        filename = self.get_filename()
+        if not os.path.exists(LatentRepEmbedder._WORKING_DIR):
+            os.makedirs(LatentRepEmbedder._WORKING_DIR)
+        save_data = {'embedder': self._embedder,
+                     'embedded_train_data': self._embedded_train_data,
+                     'codes': self._codes}
+        with open(filename, 'wb') as f:
+            pickle.dump(save_data, f)
+        logging.info("Saved embedding to %s", filename)
+
+    def load(self, filename=None):
+        filename = filename if filename is not None else self.get_filename()
+        if not os.path.exists(filename):
+            return False
+        with open(filename, 'rb') as f:
+            load_data = pickle.load(f)
+        self._embedder = load_data['embedder']
+        self._embedded_train_data = load_data['embedded_train_data']
+        self._codes = load_data['codes']
+        logging.info("Loaded embedding from %s", filename)
+        return True
 
     def _encode_data(self):
         logging.info("Encoding training set...")
         train_encoded = self._autoencoder.encode_samples(self._autoencoder.x_train_pca, raw=False)
-        train_digits = self._autoencoder.y_train
-        train_images = self._autoencoder.x_train
-        return train_encoded, train_digits, train_images
+        return train_encoded
 
-    def _calc_embeddings(self, save=True):
+    def _calc_embedding(self):
         # Run the specified embedding on the encoder
-        train_2d = []
-        save_files = []
-        for embedder in self._embedders:
-            logging.info("Calculating %s embedding for %i x %i matrix", embedder.get_name(),
-                         self._codes.shape[0], self._codes.shape[1])
-            train_2d.append(embedder.fit_embed(self._codes))
-            if save:
-                embedder_save_file = embedder.save(file_root=self._weights_filename)
-                logging.info("\tsaved result to file:  %s" % (embedder_save_file, ))
-                save_files.append(embedder_save_file)
+        logging.info("Calculating %s embedding of %i codes, dim %i...", self._type.__name__, self._codes.shape[0], self._codes.shape[1])
+        embedder = self._type()
+        train_2d = embedder.fit_embed(self._codes)
+        logging.info("Finished calculating embedding, data in range:  x:(%.4f, %.4f), y:(%.4f, %.4f)", train_2d[:, 0].min(), train_2d[:, 0].max(), train_2d[:, 1].min(), train_2d[:, 1].max())
+        return embedder, train_2d
+    
 
-        return train_2d, save_files
+    def _draw_maps(self, sample_size=0, bkg_color=None):
 
-    def _draw_maps(self, sample_size=0, bkg_color=None, disp_subset=None):
-
-        sample = np.random.choice(self._codes.shape[0], sample_size, replace=False) if sample_size >0 else np.arange(self._codes.shape[0])
+        sample = np.random.choice(self._codes.shape[0], sample_size,
+                                  replace=False) if sample_size > 0 else np.arange(self._codes.shape[0])
         images_gray = [(self._images[i, :]).reshape(28, 28) for i in sample]
         labels = self._digits[sample]
-        colors = MPL_CYCLE_COLORS
-
+        colors = np.array((MPL_CYCLE_COLORS),dtype=np.uint8)
+        map_size_wh = (4096, 4096)
         images, bboxes = [], []
-        for i, (image_locs, save_file) in enumerate(zip(self._embedded_train_data, self._embed_files)):
-            map_image_name = "%s-%s.map.png" % (self._dataset, save_file)
-            image_locs = image_locs[sample]
+        image_locs = self._embedded_train_data[sample]
 
-            blank_map = np.zeros((self._map_size_wh[1], self._map_size_wh[0], 3), dtype=np.uint8)
-            blank_map[:] = COLORS['OFF_WHITE_RGB'] if bkg_color is None else bkg_color
+        map_image_name = "%s.map.png" % ( self.get_filename(),)
+        image_locs = image_locs[sample]
 
-            map_img, mapped_bbox = _draw_embedding(
-                blank_map, image_locs, images_gray, labels=labels, color_set=colors, subset=disp_subset)
-            images.append(map_img)
-            bboxes.append(mapped_bbox)
-            cv2.imwrite(map_image_name, map_img[:, :, ::-1])
-            logging.info("Saved map image to %s", map_image_name)
+        blank_map = np.zeros((map_size_wh[1], map_size_wh[0], 3), dtype=np.uint8)
+        blank_map[:] = COLORS['OFF_WHITE_RGB'] if bkg_color is None else bkg_color
+
+        map_img, mapped_bbox = _draw_embedding(
+            blank_map, image_locs, images_gray, labels=labels, color_set=colors)
+        images.append(map_img)
+        bboxes.append(mapped_bbox)
+        cv2.imwrite(map_image_name, map_img[:, :, ::-1])
+        logging.info("Saved map image to %s", map_image_name)
         return images, bboxes
 
 
-def _draw_embedding(image, locs_xy, tiles, labels, color_set, subset=None):
+def _draw_embedding(image, locs_xy, tiles, labels, color_set):
     """
     Draw the embedding, filter by label subset if it is given.
     :param image: H x W x 3 numpy array.
@@ -115,25 +156,21 @@ def _draw_embedding(image, locs_xy, tiles, labels, color_set, subset=None):
     :param color_set: Set of colors to use for drawing the tiles (0..(num_labels-1))
     :param subset: Optional subset of labels to draw, same type as labels.
     """
-    subset_mask = np.ones(labels.shape[0], dtype=bool) if subset is None else np.isin(labels, subset)
 
-    loc_xy_subset = locs_xy[subset_mask]
-    tile_subset = [t for i , t in enumerate(tiles) if subset_mask[i]]
-    label_subset = labels[subset_mask]
-    import ipdb; ipdb.set_trace()
-
-    if label_subset.dtype not in [np.int32, np.uint8, int]:
-        label_inds = np.zeros(label_subset.shape, dtype=np.int32)
-        label_set = np.sort(np.unique(label_subset))
+    
+    if labels.dtype not in [np.int32, np.uint8, int]:
+        label_inds = np.zeros(labels.shape, dtype=np.int32)
+        label_set = np.sort(np.unique(labels))
         for l_ind, l_str in enumerate(label_set):
-            label_inds[label_subset == l_str] = l_ind
+            label_inds[labels == l_str] = l_ind
     else:
-        label_inds = label_subset
+        label_inds = labels.astype(np.int32)    
 
     image_size_wh = np.array((image.shape[1], image.shape[0]), dtype=np.float32)
-    pixel_locs = (loc_xy_subset * (image_size_wh-28*2) + 28).astype(np.int32)   
-    tiles = np.array(tile_subset,dtype=np.float32 )
-    draw_tiles(image, pixel_locs, tiles, label_inds, np.array(color_set,dtype=np.uint8))
+    pixel_locs = (locs_xy * (image_size_wh-28*2) + 28).astype(np.int32)
+    tiles = np.array(tiles, dtype=np.float32)
+
+    draw_tiles(image, pixel_locs, tiles, label_inds, np.array(color_set, dtype=np.uint8))
     return image, None
 
 
@@ -225,12 +262,21 @@ def embed_latent():
     Go through all embedding classes in EMBEDDINGS, draw a big map.
     """
     # TODO:  Add per-embedding args  --TSNE-perplexity --UMAP-n_neighbors
-    description = "Load a trained autoencoder and create embeddings for the MNIST dataset."
+    #weights_filename = r'Dense-results\digits_Dense(digits-PCA(784,UW)_units=256-2048-256-8_dec-units=512_Drop(l=1,r=0.50)).weights.h5'
+
+    description = """Compute 2d embeddings for latent representations:
+    Syntax:  python embed.py <weights_filename>
+
+    Will produce, for each embedder_class in EMBEDDINGS:
+        * 2d embeddings of the latent representation, saved in embeddings/<weights_filename>.embed-<embedder_class>
+    """
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("weights_file", help="Path to the trained network weights file")
+    parser.add_argument('weights_filename', type=str, help='Path to the trained autoencoder weights file  (saved AutoencoderExperiment)')
     args = parser.parse_args()
-    embedders = [embed_class() for embed_class in EMBEDDINGS]
-    LatentRepEmbedder(embedders=embedders, weights_filename=args.weights_file)
+
+
+    for embed_cls in EMBEDDINGS:
+        LatentRepEmbedder(embedder_class=embed_cls, weights_filename=args.weights_filename)
 
 
 def embed_raw(dataset):
@@ -245,7 +291,7 @@ def embed_raw(dataset):
     for x in data:
         print("Train", x[0].shape, "Test", x[1].shape)
 
-    # import ipdb; ipdb.set_trace()
+
     # ImageEmbedder(embedders=embedders, data=data, preproc_method=None, dataset=dataset)
 
     # ImageEmbedder(embedders=embedders, data=data, preproc_method='PCA', n_dims=2, dataset=dataset)
@@ -269,5 +315,5 @@ def embed_raw(dataset):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    # embed_latent()
-    embed_raw('alphanumeric')
+    embed_latent()
+    # embed_raw('alphanumeric')
