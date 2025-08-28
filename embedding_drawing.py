@@ -9,7 +9,7 @@ from scipy.spatial import KDTree
 from threading import Lock, Thread
 from color_blit import draw_color_tiles_cython as color_blit
 from util import draw_bbox
-
+#import keyboard
 
 class EmbeddingPanZoom(object):
     """
@@ -39,17 +39,24 @@ class EmbeddingPanZoom(object):
                        color is an (r,g,b)-tuple of ints in [0, 255]
         """
         self.bg_color = np.array((COLOR_SCHEME['bkg']), dtype=np.uint8)
-        self.size = size
         self.images_gray = np.array(images_gray).astype(np.float32)  # N x H x W
         self.tile_size = np.array((self.images_gray.shape[2], self.images_gray.shape[1]))
         self._pad_size = self.tile_size
-        # Internal image is bigger, what's returned is a view into the internal buffer.
-        self._blank = np.zeros((self.size[1], self.size[0], 3), dtype=np.uint8)
-        self._blank[:] = self.bg_color
+        self._size_orig = size
+        # shrink controls tile size
+        self._shrink_level = 0  # subtract 1 pixel from tile size until minimum
+        self._min_tile_size = 4
+        self.shrink(0)  # initialize frame
 
+        # zoom controls view window:
         self._zoom_rate = 1.1
         self._zoom_level = 1.0  # current zoom level
-        self._shutdown = False  # set True to kill
+
+        self._sample_rate = 1.0  # downsample for display
+        self._sample_step = 0.02
+        self._sample = np.arange(self.images_gray.shape[0],dtype=int)
+        self._unused = np.array([], dtype=int)
+
         # logical displayed area:
         self.bbox = {'x': (0.0, 1.0), 'y': (0.0, 1.0)}
         self.embed_xy = embed_xy  # 2x locations of tiles in logical coords (unit square)
@@ -65,6 +72,7 @@ class EmbeddingPanZoom(object):
         self._update_lock = Lock()
 
         self._frame = None
+        self._shutdown = False  # set True to kill
         self._tree = KDTree(self.embed_xy)
         logging.info("Embedding pan-zoom initialized with %i points.", len(self.embed_xy))
 
@@ -85,7 +93,7 @@ class EmbeddingPanZoom(object):
         top_len, bottom_len = pos_xy[1] - self.bbox['y'][0], self.bbox['y'][1] - pos_xy[1]
         self.bbox = {'x': (pos_xy[0] - left_len * zoom_mul, pos_xy[0] + right_len * zoom_mul),
                      'y': (pos_xy[1] - top_len * zoom_mul, pos_xy[1] + bottom_len * zoom_mul)}
-        logging.info(f"Zooming {direction} at {pos_xy}, new bbox: {self.bbox}, current level: {self._zoom_level}")
+        #logging.info(f"Zooming {direction} at {pos_xy}, new bbox: {self.bbox}, current level: {self._zoom_level}")
 
     def get_frame(self, px_offset=None, color_boxes=None, moused_over=None):
         """
@@ -96,13 +104,12 @@ class EmbeddingPanZoom(object):
         :param boxed:  Dict w/ colors as keys, list indices into tiles to draw boxes around in each color as values
         :param moused_over:  Which tile(s) are currently being hovered over, drawn in mouseover color.
         """
-        px_offset = (0, 0) if px_offset is None else px_offset  
+        px_offset = (0, 0) if px_offset is None else px_offset
         if not np.all(self._last_offset_px == px_offset) or self._frame is None:
             self._frame = self._make_frame(px_offset, color_boxes=color_boxes, moused_over=moused_over)
             self._last_offset_px = px_offset
         frame_out = self._frame.copy()
 
-        
         if moused_over is not None:
             self._draw_box_around_tile(frame_out, moused_over, color=COLOR_SCHEME['mouseover'], thickness=3)
 
@@ -182,22 +189,51 @@ class EmbeddingPanZoom(object):
         """
         Get a set of tiles in the current bounding box.
         """
-        mask = (self.embed_xy[:, 0] >= bbox['x'][0]) & (self.embed_xy[:, 0] < bbox['x'][1]) & \
-            (self.embed_xy[:, 1] >= bbox['y'][0]) & (self.embed_xy[:, 1] < bbox['y'][1])
+        sampled_mask = (self.embed_xy[self._sample, 0] >= bbox['x'][0]) & (self.embed_xy[self._sample, 0] < bbox['x'][1]) & \
+            (self.embed_xy[self._sample, 1] >= bbox['y'][0]) & (self.embed_xy[self._sample, 1] < bbox['y'][1])
+        mask = np.zeros(self.embed_xy.shape[0], dtype=bool)
+        mask[self._sample] = sampled_mask
         return mask
+
+    def shrink(self, direction):
+        if direction == 0:
+            self.size = self._size_orig
+            # Internal image is bigger, what's returned is a view into the internal buffer.
+            self._blank = np.zeros((self.size[1], self.size[0], 3), dtype=np.uint8)
+            self._blank[:] = self.bg_color
+
+        if direction > 0:
+            self._shrink_level = min(self._shrink_level + 1, self.tile_size[0] - 2)
+        else:
+            self._shrink_level = max(self._shrink_level - 1, 0) 
+        logging.info(f"Shrink level now {self._shrink_level}, tile size {self.tile_size[0] - self._shrink_level}")
+        # TODO: implement shrinking of tiles (drawing to larger image then scaling down)
+
+    def sample(self, direction):
+        if direction < 0:
+            self._sample_rate = max(self._sample_step, self._sample_rate -self._sample_step)
+            n_keep =  int(self.images_gray.shape[0]*self._sample_rate)
+            self._sample = np.random.choice(self._sample, size=n_keep, replace=False)
+        else:
+            self._sample_rate = min(1.0, self._sample_rate + self._sample_step)
+            n_add = int(self.images_gray.shape[0]*self._sample_rate) - self._sample.size
+            unused = np.setdiff1d(np.arange(self.images_gray.shape[0]), self._sample)
+            self._sample = np.concatenate([self._sample, np.random.choice(unused, size=n_add, replace=False)])
+        self._frame = None  # force redraw
+        logging.info(f"Sample rate now {self._sample_rate}, showing {self._sample.size} tiles.")
 
     def _make_frame(self, px_offset, color_boxes=None, moused_over=None):
         """
         Create a new frame for the current view.
         """
-        bbox=self._get_bbox(px_offset)
+        bbox = self._get_bbox(px_offset)
         frame = self._blank.copy()
         valid_inds = np.where(self._get_valid_tiles(bbox))[0]
         color_labels = self.int_labels[valid_inds]
         images = self.images_gray[valid_inds]
 
         # check nothing overlaps
-        embed_locs = self._embed_to_pixel(self.embed_xy[valid_inds], bbox=bbox).reshape(-1,2)
+        embed_locs = self._embed_to_pixel(self.embed_xy[valid_inds], bbox=bbox).reshape(-1, 2)
         valid_mask = (((embed_locs[:, 0] >= 0) & (embed_locs[:, 0] < self.size[0] - self._pad_size[0]) &
                       (embed_locs[:, 1] >= 0) & (embed_locs[:, 1] < self.size[1] - self._pad_size[1])))
         valid_inds = valid_inds[valid_mask]
@@ -205,6 +241,7 @@ class EmbeddingPanZoom(object):
         images = images[valid_mask]
         color_labels = color_labels[valid_mask]
         color_blit(frame, embed_locs, images, color_labels, self.colors)
+
         boxed = {} if color_boxes is None else color_boxes
         valid_inds = set(valid_inds.tolist())
         for box_color, boxed_inds in boxed.items():
@@ -213,30 +250,26 @@ class EmbeddingPanZoom(object):
                     self._draw_box_around_tile(frame, ind, box_color, thickness=2, offset=px_offset)
         return frame
 
-
-    def _draw_box_around_tile(self, frame, ind, color, thickness, offset=(0,0)):
+    def _draw_box_around_tile(self, frame, ind, color, thickness, offset=(0, 0)):
         bbox_upper_left = self._embed_to_pixel(self.embed_xy[ind])[0]
         bbox = {'x': (bbox_upper_left[0]+offset[0], bbox_upper_left[0] + self.tile_size[0]+offset[0]),
                 'y': (bbox_upper_left[1]+offset[1], bbox_upper_left[1] + self.tile_size[1]+offset[1])}
-        if color[0]>200:
-            print(bbox)
         draw_bbox(frame, bbox, color=color, thickness=thickness, inside=False)
+
 
 class EmbedTester(object):
     def __init__(self):
         from tests import load_mnist
         from load_typographyMNIST import load_numeric
-        self.size = 1200,970  # 500,500
+        self.size = 1200, 970  # 500,500
         tiles, labels, embed_xy =  self._get_real_data(load_numeric)  #_make_fake_data(6)#
-        n_sel = 20
-        selected = np.random.choice(labels.size, size=n_sel*2, replace=False) if n_sel*2<labels.size else np.arange(labels.size)
+        n_sel = 1
+        selected = np.random.choice(labels.size, size=n_sel*2, replace=False) if n_sel * \
+            2 < labels.size else np.arange(labels.size)
         self._box_colors = {COLOR_SCHEME['a_source']: selected[:1],
-                            COLOR_SCHEME['a_input']: selected[1:2],}
-                            # COLOR_SCHEME['a_input']: selected[2:3],
-                            # COLOR_SCHEME['a_output']: selected[3:]}
-
-        print(self._box_colors)
-
+                            COLOR_SCHEME['a_input']: selected[1:2], }
+        # COLOR_SCHEME['a_input']: selected[2:3],
+        # COLOR_SCHEME['a_output']: selected[3:]}
         colors = MPL_CYCLE_COLORS
         self.epz = EmbeddingPanZoom(self.size, embed_xy,
                                     tiles.reshape((-1, 28, 28)), labels, colors)
@@ -245,7 +278,7 @@ class EmbedTester(object):
         cv2.resizeWindow(self.win_name, self.size[0], self.size[1])
         cv2.setMouseCallback(self.win_name, self._mouse_callback)
 
-    def _get_real_data(self, load_fn, n_max=1000):
+    def _get_real_data(self, load_fn, n_max=2000):
 
         from embeddings import PCAEmbedding
         pca = PCAEmbedding()
@@ -266,8 +299,18 @@ class EmbedTester(object):
         while True:
             frame = self.epz.get_frame(self._pan_offset, moused_over=self._moused_over, color_boxes=self._box_colors)
             cv2.imshow(self.win_name, frame[:, :, ::-1])
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            k = cv2.waitKey(1)
+            if k & 0xFF == ord('q'):
                 break
+            elif k & 0xFF == ord(','):
+                self.epz.shrink(-1)
+            elif k & 0xFF == ord('.'):
+                self.epz.shrink(1)
+
+            elif k & 0xFF == ord(';'):
+                self.epz.sample(-1)
+            elif k & 0xFF == ord('\''):
+                self.epz.sample(1)
 
     def _mouse_callback(self, event, x, y, flags, param):
         pos_px = np.array((x, y))
