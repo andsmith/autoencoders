@@ -59,7 +59,7 @@ class EmbeddingPanZoom(object):
 
         self.labels = labels
         self.label_classes = sorted(list(set(labels)))
-
+        
         self.int_labels = np.array([self.label_classes.index(lbl) for lbl in labels])
         self.colors = colors if colors is not None else (
             np.array(sns.color_palette("husl", len(self.label_classes)))*255.0).astype(int).tolist()
@@ -103,19 +103,19 @@ class EmbeddingPanZoom(object):
             self._last_offset_px = px_offset
         frame_out = self._frame.copy()
         boxed = {} if boxed is None else boxed
-
-        def _draw_box_around_tile(ind, color):
+        px_offset = np.array(px_offset if px_offset is not None else (0, 0), dtype=np.int32)
+        def _draw_box_around_tile(ind, color, thickness):
             bbox_upper_left = self._embed_to_pixel(self.embed_xy[ind])[0]
-            bbox = {'x': (bbox_upper_left[0], bbox_upper_left[0] + self.tile_size[0]),
-                    'y': (bbox_upper_left[1], bbox_upper_left[1] + self.tile_size[1])}
-            draw_bbox(frame_out, bbox, color=color, thickness=1)
+            bbox = {'x': (bbox_upper_left[0] + px_offset[0], bbox_upper_left[0] + self.tile_size[0] + px_offset[0]),
+                    'y': (bbox_upper_left[1] + px_offset[1], bbox_upper_left[1] + self.tile_size[1] + px_offset[1])}
+            draw_bbox(frame_out, bbox, color=color, thickness=thickness,inside=False)
 
         for box_color, boxed_inds in boxed.items():
             for ind in boxed_inds:
-                _draw_box_around_tile(ind, (0,255,0))
-                
+                _draw_box_around_tile(ind, box_color, thickness=2)
+
         if moused_over is not None:
-            _draw_box_around_tile(moused_over, color=COLOR_SCHEME['mouseover'])
+            _draw_box_around_tile(moused_over, color=COLOR_SCHEME['mouseover'], thickness=3)
 
         return frame_out
 
@@ -221,10 +221,15 @@ class EmbeddingPanZoom(object):
 
 class EmbedTester(object):
     def __init__(self):
-        tiles, labels, embed_xy = _make_fake_data()  # self._get_real_data()
+        tiles, labels, embed_xy = _make_fake_data()#self._get_real_data()
+        n_sel = 2
+        selected = np.random.choice(labels.size,size=n_sel*2, replace=False)
+        self._box_colors = {COLOR_SCHEME['a_source']: selected[:n_sel],
+                            COLOR_SCHEME['a_dest']: selected[n_sel:]}
 
-        self._selected = np.random.choice(labels.size,size=3)
-        self.size =150,150#1200, 970
+        print(self._box_colors)
+
+        self.size = 1200, 970
         colors = MPL_CYCLE_COLORS
         self.epz = EmbeddingPanZoom(self.size, embed_xy,
                                     tiles.reshape((-1, 28, 28)), labels, colors)
@@ -251,8 +256,8 @@ class EmbedTester(object):
         self._moused_over = None  # index into points
 
         while True:
-            frame = self.epz.get_frame(self._pan_offset, moused_over=self._moused_over)
-            cv2.imshow(self.win_name, frame)
+            frame = self.epz.get_frame(self._pan_offset, moused_over=self._moused_over,boxed=self._box_colors)
+            cv2.imshow(self.win_name, frame[:,:,::-1])
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
@@ -279,11 +284,13 @@ class EmbedTester(object):
 
 
 def _make_fake_data():
-    n_tiles = 5
+    embed_locs_xy = np.array([(0.1, 0.1), (0.9, 0.1), (0.1, 0.9), (0.6, 0.6), (0.5, 0.5), (0.9, 0.9)])
+    n_tiles = embed_locs_xy.shape[0]
+    labels = np.array(["%i"%(l%2,) for l in range(n_tiles)])
+
     tile_size = 28
     tiles = np.random.rand(tile_size**2 * n_tiles).reshape((n_tiles, tile_size, tile_size))
-    embed_locs_xy = np.array([(0.1, 0.1), (0.9, 0.1), (0.1, 0.9), (0.9, 0.9), (0.5, 0.5)])
-    labels = np.array(["%i"%l for l in [0, 1, 0, 1, 0]])
+    
     return tiles, labels, embed_locs_xy
 
 
@@ -293,20 +300,10 @@ def test_mouseover():
     epz = EmbeddingPanZoom((150, 150), embed_locs_xy, tiles, labels, colors=colors)
     p1=(75, 75)
     mo = epz.get_moused_over(p1)
-    #assert mo is not None and mo == 4, f"Expected to mouse over center tile, got {mo}"
+    assert mo is not None and mo == 4, f"Expected to mouse over center tile, got {mo}"
     p2=(85, 94)
-    #import ipdb; ipdb.set_trace()
     mo = epz.get_moused_over(p2)
-    #assert mo is not None and mo == 3, f"Expected to mouse over bottom-left tile, got {mo}"
-    frame = epz.get_frame()
-
-    def draw_pt(pt):
-        frame[pt[0]: pt[0]+4, pt[1]:pt[1]+4] = (0,255,0)
-
-    draw_pt(p1)
-    draw_pt(p2)
-    cv2.imshow("Mouseover test", frame[:,:,::-1])
-    cv2.waitKey(0)
+    assert mo is not None and mo == 3, f"Expected to mouse over bottom-left tile, got {mo}"
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

@@ -1,7 +1,7 @@
 COLORS = dict(MPL_BLUE_RGB=(31, 119, 180),
               MPL_ORANGE_RGB=(255, 127, 14),
               MPL_GREEN_RGB=(44, 160, 44),
-                MPL_RED_RGB=(214, 39, 40),
+              MPL_RED_RGB=(214, 39, 40),
               OFF_WHITE_RGB=(246, 238, 227),
               DARK_NAVY_RGB=(0, 4, 51),
               DARK_RED_RGB=(179, 25, 66),
@@ -25,13 +25,15 @@ MPL_CYCLE_COLORS = [(31, 119, 180),
                     (44, 160, 44),
                     (0, 4, 51)]
 
-
+# analogy_source : analogy_dest :: analogy_input : analogy_output
 COLOR_SCHEME = {'mouseover': COLORS['NEON_GREEN'],
-           'a_target': COLORS['NEON_BLUE'],
-           'vector': COLORS['DARK_NAVY_RGB'],
-           'mouse_hold': COLORS['DARK_RED_RGB'],
-           'bkg': COLORS['OFF_WHITE_RGB'],
-           'text': COLORS['DARK_NAVY_RGB'], }
+                'a_source': COLORS['DARK_RED_RGB'],
+                'a_dest': COLORS['NEON_RED'],
+                'a_input': COLORS['DARK_NAVY_RGB'],
+                'a_output': COLORS['SKY_BLUE'],
+                'vector': COLORS['GREEN'],
+                'bkg': COLORS['OFF_WHITE_RGB'],
+                'text': COLORS['DARK_NAVY_RGB'], }
 
 
 def bgr2rgb(color):
