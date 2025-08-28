@@ -25,14 +25,20 @@ from embeddings import PCAEmbedding, TSNEEmbedding, UMAPEmbedding, RandomProject
 from util import PointSet2d
 from colors import COLORS, MPL_CYCLE_COLORS
 import argparse
-from embedding_drawing import draw_embedding
-from load_ae import load_autoencoder
+from color_blit import draw_color_tiles_cython as draw_tiles
+#from load_ae import load_autoencoder
 from img_util import make_img as mnist_img
 from tests import load_mnist, load_fashion_mnist
+from load_typographyMNIST import load_alphanumeric, load_numeric
+
 
 from pca import PCA
 # Run on each of these:
-EMBEDDINGS = [ TSNEEmbedding, UMAPEmbedding]#PCAEmbedding, RandomProjectionEmbedding,
+EMBEDDINGS = [ PCAEmbedding,TSNEEmbedding, UMAPEmbedding]  # UMAPEmbedding, RandomProjectionEmbedding,
+LOADERS = {'digits': load_mnist,
+           'numeric': load_numeric,
+           'alphanumeric': lambda **kwargs: load_alphanumeric(**kwargs, numeric_labels=False,subset = ['A', 'B', 'C', '1', '2', '3']),
+           'fashion': load_fashion_mnist}
 
 
 class LatentRepEmbedder(object):
@@ -41,7 +47,7 @@ class LatentRepEmbedder(object):
         :param weights_filename: Path to the trained autoencoder weights file  (saved AutoencoderExperiment)
         :param map_size_wh: Size of the map to draw the embeddings on
         """
-        self._dataset = "Digits"
+        self._dataset = "digits"
         self._map_size_wh = map_size_wh
         self._weights_filename = weights_filename
         self._autoencoder = self._load_autoencoder()
@@ -75,8 +81,9 @@ class LatentRepEmbedder(object):
 
         return train_2d, save_files
 
-    def _draw_maps(self, sample_size=20000, bkg_color=None):
-        sample = np.random.choice(self._codes.shape[0], sample_size, replace=False)
+    def _draw_maps(self, sample_size=0, bkg_color=None, disp_subset=None):
+
+        sample = np.random.choice(self._codes.shape[0], sample_size, replace=False) if sample_size >0 else np.arange(self._codes.shape[0])
         images_gray = [(self._images[i, :]).reshape(28, 28) for i in sample]
         labels = self._digits[sample]
         colors = MPL_CYCLE_COLORS
@@ -89,12 +96,45 @@ class LatentRepEmbedder(object):
             blank_map = np.zeros((self._map_size_wh[1], self._map_size_wh[0], 3), dtype=np.uint8)
             blank_map[:] = COLORS['OFF_WHITE_RGB'] if bkg_color is None else bkg_color
 
-            map_img, mapped_bbox = draw_embedding(blank_map, image_locs, images_gray, labels=labels, colors=colors)
+            map_img, mapped_bbox = _draw_embedding(
+                blank_map, image_locs, images_gray, labels=labels, color_set=colors, subset=disp_subset)
             images.append(map_img)
             bboxes.append(mapped_bbox)
             cv2.imwrite(map_image_name, map_img[:, :, ::-1])
             logging.info("Saved map image to %s", map_image_name)
         return images, bboxes
+
+
+def _draw_embedding(image, locs_xy, tiles, labels, color_set, subset=None):
+    """
+    Draw the embedding, filter by label subset if it is given.
+    :param image: H x W x 3 numpy array.
+    :param locs_xy: (N x 2) numpy array of x,y coordinates (pixel locations to draw the tiles)
+    :param tiles: (N x Th x Tw x 3) numpy array of Tx x Tw tile images
+    :param labels: (N,) numpy array of labels for each tile, int or string for alpha-numeric datasets.
+    :param color_set: Set of colors to use for drawing the tiles (0..(num_labels-1))
+    :param subset: Optional subset of labels to draw, same type as labels.
+    """
+    subset_mask = np.ones(labels.shape[0], dtype=bool) if subset is None else np.isin(labels, subset)
+
+    loc_xy_subset = locs_xy[subset_mask]
+    tile_subset = [t for i , t in enumerate(tiles) if subset_mask[i]]
+    label_subset = labels[subset_mask]
+    import ipdb; ipdb.set_trace()
+
+    if label_subset.dtype not in [np.int32, np.uint8, int]:
+        label_inds = np.zeros(label_subset.shape, dtype=np.int32)
+        label_set = np.sort(np.unique(label_subset))
+        for l_ind, l_str in enumerate(label_set):
+            label_inds[label_subset == l_str] = l_ind
+    else:
+        label_inds = label_subset
+
+    image_size_wh = np.array((image.shape[1], image.shape[0]), dtype=np.float32)
+    pixel_locs = (loc_xy_subset * (image_size_wh-28*2) + 28).astype(np.int32)   
+    tiles = np.array(tile_subset,dtype=np.float32 )
+    draw_tiles(image, pixel_locs, tiles, label_inds, np.array(color_set,dtype=np.uint8))
+    return image, None
 
 
 class CodeSetDist(LatentCodeSet):
@@ -128,11 +168,12 @@ class ImageEmbedder(LatentRepEmbedder):
     # Do not run PCAEmbedding on whitened data, since all components have equal variance.
     _PREPROC_METHODS = ['PCA', 'PCA-UW', 'random', None]
 
-    def __init__(self, embedders, data, preproc_method, n_dims=None, map_size_wh=(4096, 4096), dataset='Digits'):
+    def __init__(self, embedders, data, preproc_method, n_dims=None, map_size_wh=(4096, 4096), dataset='digits', disp_subset=None):
         self._preproc = preproc_method
         self._dataset = dataset
         self._n_dims = n_dims
         self._map_size_wh = map_size_wh
+        self._disp_subset = disp_subset
         self._embedders = embedders
         print("\nEmbedders:")
         for embedder in self._embedders:
@@ -144,8 +185,8 @@ class ImageEmbedder(LatentRepEmbedder):
 
         # Map filenames based on these:
         self._embed_files = [self._get_name(embedder) for embedder in self._embedders]
-        #self._draw_stats()
-        self._draw_maps()
+        # self._draw_stats()
+        self._draw_maps(disp_subset=self._disp_subset)
 
     def _draw_stats(self):
         code_dist = CodeSetDist(self._embedded_train_data)
@@ -153,7 +194,7 @@ class ImageEmbedder(LatentRepEmbedder):
 
     def _get_name(self, embedder):
         pre = ("%s(d=%i)" % (self._preproc, self._n_dims)) if self._preproc is not None else "raw(d=768)"
-        return "raw_%s_embedding=%s_PreProc=%s" % (self._dataset.lower(),embedder.get_name(), pre)
+        return "raw_%s_embedding=%s_PreProc=%s" % (self._dataset.lower(), embedder.get_name(), pre)
 
     def _load_data(self, data):
         (self.x_train, self.y_train), (self.x_test, self.y_test) = data
@@ -200,12 +241,12 @@ def embed_raw(dataset):
 
     embedders = [embed_class() for embed_class in EMBEDDINGS]
 
-    data = load_mnist() if dataset == 'Digits' else load_fashion_mnist()
+    data = LOADERS[dataset.lower()]()
     for x in data:
         print("Train", x[0].shape, "Test", x[1].shape)
 
     # import ipdb; ipdb.set_trace()
-    ImageEmbedder(embedders=embedders, data=data, preproc_method=None, dataset=dataset)
+    # ImageEmbedder(embedders=embedders, data=data, preproc_method=None, dataset=dataset)
 
     # ImageEmbedder(embedders=embedders, data=data, preproc_method='PCA', n_dims=2, dataset=dataset)
     # ImageEmbedder(embedders=embedders, data=data, preproc_method='PCA-UW', n_dims=2, dataset=dataset)
@@ -218,15 +259,15 @@ def embed_raw(dataset):
     # ImageEmbedder(embedders=embedders, data=data, preproc_method='PCA', n_dims=32, dataset=dataset)
     # ImageEmbedder(embedders=embedders, data=data, preproc_method='PCA-UW', n_dims=32, dataset=dataset)
     # ImageEmbedder(embedders=embedders, data=data, preproc_method='random', n_dims=32, dataset=dataset)
-
-    ImageEmbedder(embedders=embedders, data=data, preproc_method='PCA', n_dims=64, dataset=dataset)
-    ImageEmbedder(embedders=embedders, data=data, preproc_method='PCA-UW', n_dims=64, dataset=dataset)
-    ImageEmbedder(embedders=embedders, data=data, preproc_method='random', n_dims=64, dataset=dataset)
+    img_char_subset = ['A', 'B', 'C', '1', '2', '3']
+    ImageEmbedder(embedders=embedders, data=data, preproc_method='PCA',
+                  n_dims=128, dataset=dataset, disp_subset=img_char_subset)
+    # ImageEmbedder(embedders=embedders, data=data, preproc_method='PCA-UW', n_dims=64, dataset=dataset)
+    # ImageEmbedder(embedders=embedders, data=data, preproc_method='random', n_dims=64, dataset=dataset)
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     # embed_latent()
-    embed_raw('Fashion')
-
+    embed_raw('alphanumeric')

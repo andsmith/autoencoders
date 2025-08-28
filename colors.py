@@ -26,5 +26,13 @@ MPL_CYCLE_COLORS = [(31, 119, 180),
                     (0, 4, 51)]
 
 
+COLOR_SCHEME = {'mouseover': COLORS['NEON_GREEN'],
+           'a_target': COLORS['NEON_BLUE'],
+           'vector': COLORS['DARK_NAVY_RGB'],
+           'mouse_hold': COLORS['DARK_RED_RGB'],
+           'bkg': COLORS['OFF_WHITE_RGB'],
+           'text': COLORS['DARK_NAVY_RGB'], }
+
+
 def bgr2rgb(color):
     return color[2], color[1], color[0]
