@@ -83,6 +83,17 @@ class Tool(ABC):
         """
         pass
 
+    def on_mouse(self, event, x, y, flags, param):
+        inside = bbox_contains(self._bbox, x, y)
+        if event == cv2.EVENT_LBUTTONDOWN:
+            if inside:
+                return self.mouse_click(x, y)
+        elif event == cv2.EVENT_MOUSEMOVE:
+            return self.mouse_move(x, y)
+        elif event == cv2.EVENT_LBUTTONUP:
+            if inside:
+                return self.mouse_unclick(x, y)
+
     # above methods will not be called if tool is not visible:
     def render(self, img):
         if self._visible:
@@ -536,7 +547,7 @@ class RadioButtons(Tool):
         longest_line = np.argmax([len(t) for t in self._texts])
         self._font_size, pos_rel, self._thickness = get_font_size(
             self._texts[longest_line], (width-self._spacing_px*3, line_h), incl_baseline=False, font=self._font)
-
+        self._font_size = min(self._font_size, self._title_font_size)
         self._line_coords = [(left, top),
                              (left+width, top)]
         self._text_pos = []
@@ -558,7 +569,7 @@ class RadioButtons(Tool):
         # cv2.rectangle(img, p0, p1, self._colors['unselected'], 1)  # draw bbox
         cv2.putText(img, self._txt_name, self._title_pos, self._font,
                     self._title_font_size, self._colors['unselected'], 1, cv2.LINE_AA)
-        cv2.line(img, self._line_coords[0], self._line_coords[1], self._colors['unselected'])
+        #cv2.line(img, self._line_coords[0], self._line_coords[1], self._colors['unselected'])
 
         for i, text_pos in enumerate(self._text_pos):
             if i == self._selected_ind:
