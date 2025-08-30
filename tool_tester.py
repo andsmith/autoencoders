@@ -25,14 +25,17 @@ class ToolTester(object):
         """
         Test the tool.
         """
-
-        blank = np.zeros((500, 500, 3), dtype=np.uint8) 
-        blank[:] = COLORS['OFF_WHITE_RGB']
         # draw_color = COLORS['black'].tolist()
-        cv2.namedWindow("Test")
+        cv2.namedWindow("Test", cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("Test", *self._img_size)
         cv2.setMouseCallback("Test", self._mouse_callback)
+        size = None
         while True:
-            img = blank.copy()
+            cur_size  = cv2.getWindowImageRect("Test")
+            if (size is None) or (size[2] != cur_size[2]) or (size[3] != cur_size[3]):
+                size = cur_size
+            img = np.zeros((size[3], size[2], 3), dtype=np.uint8)
+            img[:] = COLORS['OFF_WHITE_RGB']
             for tool in self._tools:
                 tool.render(img)
             cv2.imshow("Test", img[:,:,::-1])
