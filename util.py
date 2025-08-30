@@ -1,8 +1,10 @@
+from tkinter import font
 import numpy as np
 from scipy.spatial import KDTree
 import matplotlib.pyplot as plt
 import logging
 import seaborn as sns
+import cv2
 
 
 class PointSet2d(object):
@@ -132,6 +134,66 @@ def test_make_data(d=3, plot=True):
         plt.show()
 
 
+def get_font_size(text, size_wh, incl_baseline=False, max_scale=10.0, pad=5):
+    """
+    Shrink font until it just fits,
+    return font size, pos_xy, thickness, such that cv2.putText will put the text at the right place.
+    """
+    def _get_h_w(font_scale):
+        (width, height), baseline = cv2.getTextSize(text, font, font_scale, 1)
+        if not incl_baseline:
+            return (width, height), baseline
+        return (width, height+baseline), baseline
+
+    font_scale = max_scale
+    incr = 0.1
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    text_wh, baseline = _get_h_w(font_scale)
+    while text_wh[0] > size_wh[0]-pad*2 or text_wh[1] > size_wh[1]-pad*2:
+        font_scale -= incr
+        text_wh, baseline = _get_h_w(font_scale)
+    text_x = (size_wh[0] - text_wh[0]) // 2
+    if not incl_baseline:
+        text_y = (size_wh[1] + text_wh[1]) // 2
+    else:
+        text_y = (size_wh[1] + text_wh[1]) // 2 - baseline
+    thickness = max(1, int(font_scale*1.25))
+
+    return font_scale, (text_x, text_y), thickness
+
+
+def test_get_font_size():
+    strings = ['#','test_string 1']
+    box_sizes = [(100, 30), (50, 20), (200, 100), (400, 100), (300, 40)]
+    pad = 10
+    h = np.sum([b[1] + pad for b in box_sizes]) + pad
+    w = np.max([b[0] + pad for b in box_sizes])*2 + pad
+    mid = w//2
+    blank_img = np.zeros((h, w, 3), dtype=np.uint8)
+    boxes = {}
+    x = pad
+    for string in strings:
+        y = pad
+        boxes[string] = []
+        for w, h in box_sizes:
+            boxes[string].append({'x': (x, x + w), 'y': (y, y + h)})
+            y += h + pad
+        x = mid + pad//2
+        
+    for string in boxes:
+        for box in boxes[string]:
+            draw_bbox(blank_img, box, 2, color=(255, 255, 255))
+            box_w, box_h = box['x'][1] - box['x'][0], box['y'][1] - box['y'][0]
+            #import ipdb; ipdb.set_trace()
+            incl_baseline = len(string) == 1
+            font_scale, pos_xy_rel, thickness = get_font_size(string, (box_w, box_h), incl_baseline=incl_baseline)
+            pos_xy = (pos_xy_rel[0] + box['x'][0], pos_xy_rel[1] + box['y'][0])
+            cv2.putText(blank_img, string, pos_xy, cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+    plt.imshow(blank_img)
+    plt.axis('off')
+    plt.show()
+
+
 def fit_spaced_intervals(extent, n_intervals, spacing_fraction, min_spacing=1, fill_extent=True):
     """
     Fit intervals within a given extent, ensuring specified spacing between them, but not on either end,
@@ -153,7 +215,7 @@ def fit_spaced_intervals(extent, n_intervals, spacing_fraction, min_spacing=1, f
     if spacing < min_spacing:
         spacing = min_spacing
         interval_size = (total_size - spacing * (n_intervals - 1)) / n_intervals
-        #interval_starts = (np.arange(n_intervals) * (interval_size + spacing) + extent[0])
+        # interval_starts = (np.arange(n_intervals) * (interval_size + spacing) + extent[0])
     if not fill_extent:
         spacing = int(spacing)
         interval_size = int(interval_size)
@@ -179,17 +241,18 @@ def test_fit_spaced_intervals():
             intervals = fit_spaced_intervals(ext, n_int, s_frac)
             intervals_even = fit_spaced_intervals(ext, n_int, s_frac, fill_extent=False)
             interval_size = intervals[0][1] - intervals[0][0] if intervals else 0
+
             def _plot_at_y(intv, y):
                 xcoords = np.array([(start, end, np.nan) for (start, end) in intv]).flatten()
                 ycoords = np.zeros_like(xcoords) + y
                 coords = np.stack([xcoords[:, ...], ycoords[:, ...]], axis=-1)
-                ax[i, j].plot(coords[:, 0], coords[:, 1], 'o-',markersize=2)
+                ax[i, j].plot(coords[:, 0], coords[:, 1], 'o-', markersize=2)
                 ax[i, j].axis('off')
             _plot_at_y(intervals, -0.1)
             _plot_at_y(intervals_even, 0.1)
             ax[i, j].plot([ext[0], ext[0]], [-.3, .3], 'k-')
             ax[i, j].plot([ext[1], ext[1]], [-.3, .3], 'k-')
-            ax[i, j].set_title(f"Intervals: {n_int}, size={interval_size}, spacing_frac={s_frac}\n"+
+            ax[i, j].set_title(f"Intervals: {n_int}, size={interval_size}, spacing_frac={s_frac}\n" +
                                f"blue: {intervals[0][0]} .. {intervals[-1][1]},  " +
                                f"orange: {intervals_even[0][0]} .. {intervals_even[-1][1]}",
                                fontsize=10)
@@ -200,6 +263,7 @@ def test_fit_spaced_intervals():
                  'orange: fill-extent=False (even spacing, uneven endpoints)' % (ext[0], ext[1]))
     plt.tight_layout()
     plt.show()
+
 
 def draw_bbox(image, bbox, thickness=1, inside=True, color=(128, 128, 128)):
     """
@@ -246,10 +310,10 @@ def test_draw_bbox():
     plt.show()
 
 
-
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     # test_make_random_cov(n_points=10000, plot=True)
     # test_make_data(d=2, plot=True)
-    test_fit_spaced_intervals()
+    # test_fit_spaced_intervals()
+    test_get_font_size()
     logging.info("Tests completed successfully.")

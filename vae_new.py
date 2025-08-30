@@ -51,13 +51,13 @@ class VAEExperiment(AutoencoderExperiment):
 
 
     def __init__(self, enc_layer_desc=(64,), pca_dims=0, whiten_input=True, 
-                 n_train_samples=0, bw_images=False, use_pca_cache=True,
+                 n_train_samples=0, binary_input=False, use_pca_cache=True,
                  dropout_info=None, **kwargs):
         self.enc_layer_desc = enc_layer_desc
         self.pca_dims = pca_dims
         self.whiten_input = whiten_input
         self.n_train_samples = n_train_samples
-        self.bw_images = bw_images
+        self.binary_input = binary_input
         self.use_pca_cache = use_pca_cache
         self.dropout_info = dropout_info
         super().__init__(**kwargs)

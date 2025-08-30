@@ -36,10 +36,10 @@ class NumericMNISTData(MNISTData):
 
 
 class AlphaNumericMNISTData(MNISTData):
-    def __init__(self, use_good_subset=True):
+    def __init__(self, use_good_subset=True, test_train_split=0.15):
         subset = GOOD_CHAR_SET if use_good_subset else None
         (self.x_train, self.labels_train, self.font_names_train), (
-            self.x_test, self.labels_test, self.font_names_test) = load_alphanumeric(numeric_labels=False, w_names=True, subset=subset)
+            self.x_test, self.labels_test, self.font_names_test) = load_alphanumeric(numeric_labels=False, w_names=True, subset=subset, test_train_split=test_train_split)
         label_classes = sorted(list(set(self.labels_train) | set(self.labels_test)))
         self.class_name_to_index = {name: i for i, name in enumerate(label_classes)}
         self.index_to_class_name = {i: name for i, name in enumerate(label_classes)}
