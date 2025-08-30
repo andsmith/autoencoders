@@ -134,7 +134,7 @@ def test_make_data(d=3, plot=True):
         plt.show()
 
 
-def get_font_size(text, size_wh, incl_baseline=False, max_scale=10.0, pad=5):
+def get_font_size(text, size_wh, incl_baseline=False, max_scale=10.0, pad=5, font=cv2.FONT_HERSHEY_DUPLEX):
     """
     Shrink font until it just fits,
     return font size, pos_xy, thickness, such that cv2.putText will put the text at the right place.
@@ -147,7 +147,6 @@ def get_font_size(text, size_wh, incl_baseline=False, max_scale=10.0, pad=5):
 
     font_scale = max_scale
     incr = 0.1
-    font = cv2.FONT_HERSHEY_SIMPLEX
     text_wh, baseline = _get_h_w(font_scale)
     while text_wh[0] > size_wh[0]-pad*2 or text_wh[1] > size_wh[1]-pad*2:
         font_scale -= incr
