@@ -112,8 +112,8 @@ class CharsetWindow(object):
         button_x = (button_left, button_right)
         button_h, button_w = button_y[0][1] - button_y[0][0], button_x[1] - button_x[0]
         bpad = min(14, button_h // 4)
-        button_font_size, xy_rel,thickness = get_font_size('Good', (button_w, button_h),
-                                                 incl_baseline=False, pad=bpad)
+        button_font_size, xy_rel, thickness = get_font_size('Good', (button_w, button_h),
+                                                            incl_baseline=False, pad=bpad)
         self._buttons = [{'text': 'All',
                           'bbox': {'x': button_x, 'y': button_y[0]},
                           'text_pos': (button_x[0] + xy_rel[0], button_y[0][0] + xy_rel[1])},
@@ -139,23 +139,25 @@ class CharsetWindow(object):
                                              fill_extent=False)
         char_button_h = char_button_y[0][1] - char_button_y[0][0]
         char_button_w = char_button_x[0][1] - char_button_x[0][0]
-        cpad=min(4, char_button_h // 3)
-        print(cpad)
+        cpad = min(4, char_button_h // 3)
+
         char_font_size, xy_rel, thickness = get_font_size("#", (char_button_w, char_button_h),
-                                               incl_baseline=False, pad=cpad)
+                                                          incl_baseline=False, pad=cpad)
 
         self._char_buttons = []
         for c_ind, char in enumerate(self.chars):
-            
+
             col = c_ind % self.ncols
             row = c_ind // self.ncols
             bbox = {'x': char_button_x[col], 'y': char_button_y[row]}
-
+            (width, height), baseline = cv2.getTextSize(str(char), cv2.FONT_HERSHEY_COMPLEX, char_font_size, thickness)
+            text_x = (char_button_x[col][0] + char_button_x[col][1]) // 2 - width // 2
+            text_y = (char_button_y[row][0] + char_button_y[row][1]) // 2  + height // 2
             char_button = {'char': char,
                            'text': char,
                            'thickness': thickness,
                            'bbox': bbox,
-                           'text_pos': (char_button_x[col][0] + xy_rel[0], char_button_y[row][0] + xy_rel[1]),
+                           'text_pos': (text_x, text_y),
                            'font_size': char_font_size,
                            'mouseover': False,
                            'color': self._LAYOUT['bbox_color']}
@@ -190,7 +192,7 @@ class CharsetWindow(object):
             _draw_box(button, color, text_color)
 
         for char_button in self._char_buttons:
-            
+
             if not self.char_states[char_button['char']]:
                 text_color = self._LAYOUT['unused_color']
                 color = self._LAYOUT['unused_color']
@@ -199,7 +201,7 @@ class CharsetWindow(object):
                 color = self._LAYOUT['text_color']
 
             text_color = text_color if not char_button['mouseover'] else self._LAYOUT['mouseover_color']
-            color = color if not char_button['mouseover'] else self._LAYOUT['mouseover_color']
+            color = None if not char_button['mouseover'] else self._LAYOUT['mouseover_color']
 
             _draw_box(char_button, color, text_color)
 
@@ -250,6 +252,10 @@ class CharsetWindow(object):
 
 
 class FakeApp(object):
+    """
+
+    """
+
     def __init__(self):
         self.data = AlphaNumericMNISTData(use_good_subset=False, test_train_split=0.0)
         self.disp_font_ind = 0
@@ -278,7 +284,7 @@ def test_charset_window():
 
         frame = window.draw(make_blank((current_width, current_height)))
 
-        cv2.imshow(win_name, frame[:,:,::-1])
+        cv2.imshow(win_name, frame[:, :, ::-1])
         k = cv2.waitKey(10)
         if k == 27:
             break
