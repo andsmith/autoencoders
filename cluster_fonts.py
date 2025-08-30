@@ -16,14 +16,11 @@ Clustering algorithms and parameters:
 
     - Clustering:
         - K, the number of clusters
-        - Outlier filtering method:
+        - Outlier filtering method:  (TODO)
             - remove small clusters (below a threshold size) & re-cluster up to N times.
         - Algorithms:
             - k-means, params:
-                - Distance metric:  cosine, euclidean
-            - agglomerative, params:
-                - Distance metric:  cosine, euclidean
-                - Linkage:  ward, complete, average
+                - Distance metric:  cosine, euclidean\
             - spectral, params:
                 - Similarity graph type:
                     - Epsilon (binary, within max distance threshold)
@@ -48,9 +45,69 @@ import argparse
 from sklearn.cluster import KMeans, AgglomerativeClustering
 from mnist import AlphaNumericMNISTData
 from util import fit_spaced_intervals, draw_bbox, get_font_size
+from abc import ABC, abstractmethod
+from tools import RadioButtons, Slider, Button, ToggleButton
 
 
-class CharsetWindow(object):
+class ControlWindow(object):
+    """
+    +--------------------+
+    | Clustering alg     |
+    |  - Kmeans          | <- unselected
+    |  * Spectral        | <- selected
+    |                    |
+    | Params:            |
+    |  +---------K----+  |  <- slider
+    |  +--pca-----+ [W]  |  <- slider, whitened/unwhitened toggle button
+    |                    |
+    | Sim-graph type:    |
+    |   - Epsilon        |
+    |   * KNN            |
+    |   - Full           |
+    |                    |
+    | Sim-graph params:  |
+    |  +--k-------+ [M]  |  <- updates for selected sim-graph type.
+    |                    |
+    |   CLUSTER FONTS    |  <- button
+    +--------------------+
+"""
+    _LAYOUT = {'indent_px': 10}
+
+    def __init__(self, app, size=(300, 400)):
+        pass
+
+
+class ClusterWindow(ABC):
+    def __init__(self, app, bbox_rel=None):
+        """
+        Initialize the cluster window.
+        :param app: The main application instance.
+        :param bbox_rel: The relative bounding box for the window,
+          {'x': (x_min, x_max), 'y': (y_min, y_max)} all in [0, 1]
+        """
+        self.app = app
+        self._bbox_rel = bbox_rel if bbox_rel is not None else {'x': [0.0, 1.0], 'y': [0.0, 1.0]}
+        self._last_size = None
+
+    @abstractmethod
+    def _draw(self, image):
+        pass
+
+    @abstractmethod
+    def _resize(self, new_size):
+        """
+        Calculate necessary adjustments for the new size.
+        """
+        pass
+
+    def draw(self, image):
+        if self._last_size is None or self._last_size != (image.shape[1], image.shape[0]):
+            self._resize((image.shape[1], image.shape[0]))
+            self._last_size = (image.shape[1], image.shape[0])
+        return self._draw(image)
+
+
+class CharsetWindow(ClusterWindow):
     _LAYOUT = {'indent_px': 28,
                'x_div_rel': .2,
                'char_spacing_frac': 0.1,
@@ -60,7 +117,7 @@ class CharsetWindow(object):
                'unused_color': COLORS['SKY_BLUE'],
                'mouseover_color': COLORS['DARK_RED_RGB']}
 
-    def __init__(self, app, size=(1000, 300), shape=[5, 20]):
+    def __init__(self, app, bbox_rel=None, shape=[5, 20]):
         """
         Pick from the 94 characters to use in the clustering.
             Quick-buttons:  "All, None, Good", select all, none or those in the GOOD_CHAR_SET
@@ -81,32 +138,28 @@ class CharsetWindow(object):
         :param size: Will draw in box of this size (width, height)
         :param shape: The grid shape for the character set buttons (rows, cols):
         """
+        super().__init__(app, bbox_rel)
         self.chars = sorted(np.unique(app.data.labels_train))
         self.char_states = {char: (char in app.char_set) for char in self.chars}
-        self.app = app
         self.nrows, self.ncols = shape
         self._mouse_down = False
-        self._mouse_over = None
-        self.set_size(size)
-        logging.info("CharsetWindow:  %i chars, %.2f %% on, shape %s", len(self.chars),
-                     100 * sum(self.char_states.values()) / len(self.char_states), shape)
+        self._mouse_over_text = None  # button text
 
-    def set_size(self, new_size):
+    def _resize(self, size):
         """
-        Get layout of window.
-        :returns:
-            buttons:  list of dicts with {'text': <button_text>
-                                          'bbox': ((x_min, x_max),( y_min, y_max))}
-            char_buttons:  same list ,for each of the character buttons
         """
-        self.size = new_size
+        left, right = int(self._bbox_rel['x'][0] * size[0]), int(self._bbox_rel['x'][1] * size[0])
+        top, bottom = int(self._bbox_rel['y'][0] * size[1]), int(self._bbox_rel['y'][1] * size[1])
+        width, height = right - left, bottom - top
+        self._bbox = {'x': (left, right),
+                      'y': (top, bottom)}
 
         ind = self._LAYOUT['indent_px']
-        x_mid = int(self.size[0] * self._LAYOUT['x_div_rel'])
+        x_mid = int(width * self._LAYOUT['x_div_rel']) + left
 
         # multi-char buttons:
-        button_left, button_right = ind, x_mid - ind
-        button_top, button_bottom = ind, self.size[1] - ind
+        button_left, button_right = left + ind, x_mid - ind
+        button_top, button_bottom = top + ind, bottom - ind
         button_y = fit_spaced_intervals((button_top, button_bottom), 3, self._LAYOUT['button_spacing_frac'],
                                         fill_extent=False)
         button_x = (button_left, button_right)
@@ -114,25 +167,26 @@ class CharsetWindow(object):
         bpad = min(14, button_h // 4)
         button_font_size, xy_rel, thickness = get_font_size('Good', (button_w, button_h),
                                                             incl_baseline=False, pad=bpad)
-        self._buttons = [{'text': 'All',
-                          'bbox': {'x': button_x, 'y': button_y[0]},
-                          'text_pos': (button_x[0] + xy_rel[0], button_y[0][0] + xy_rel[1])},
-                         {'text': 'None',
-                          'bbox': {'x': button_x, 'y': button_y[1]},
-                          'text_pos': (button_x[0] + xy_rel[0], button_y[1][0] + xy_rel[1])},
-                         {'text': 'Good',
-                          'bbox': {'x': button_x, 'y': button_y[2]},
-                          'text_pos': (button_x[0] + xy_rel[0], button_y[2][0] + xy_rel[1])}]
+        
+        self._buttons = {'All': {'text':'All',
+                                 'bbox': {'x': button_x, 'y': button_y[0]},
+                                 'text_pos': (button_x[0] + xy_rel[0], button_y[0][0] + xy_rel[1])},
+                         'None': {'text':'None',
+                                  'bbox': {'x': button_x, 'y': button_y[1]},
+                                  'text_pos': (button_x[0] + xy_rel[0], button_y[1][0] + xy_rel[1])},
+                         'Good': {'text':'Good',
+                                  'bbox': {'x': button_x, 'y': button_y[2]},
+                                  'text_pos': (button_x[0] + xy_rel[0], button_y[2][0] + xy_rel[1])}}
 
         for button in self._buttons:
-            button['mouseover'] = False
-            button['font_size'] = button_font_size
-            button['color'] = self._LAYOUT['bbox_color']
-            button['thickness'] = thickness
+            self._buttons[button]['mouseover'] = False
+            self._buttons[button]['font_size'] = button_font_size
+            self._buttons[button]['color'] = self._LAYOUT['bbox_color']
+            self._buttons[button]['thickness'] = thickness
 
         # Character buttons
-        char_button_left, char_button_right = button_right + ind, self.size[0] - ind
-        char_button_top, char_button_bottom = button_top, button_bottom
+        char_button_left, char_button_right = x_mid + ind, right - ind
+        char_button_top, char_button_bottom = top + ind, bottom - ind
         char_button_x = fit_spaced_intervals((char_button_left, char_button_right), self.ncols, self._LAYOUT['char_spacing_frac'],
                                              fill_extent=False)
         char_button_y = fit_spaced_intervals((char_button_top, char_button_bottom), self.nrows, self._LAYOUT['char_spacing_frac'],
@@ -144,7 +198,7 @@ class CharsetWindow(object):
         char_font_size, xy_rel, thickness = get_font_size("#", (char_button_w, char_button_h),
                                                           incl_baseline=False, pad=cpad)
 
-        self._char_buttons = []
+        self._char_buttons = {}
         for c_ind, char in enumerate(self.chars):
 
             col = c_ind % self.ncols
@@ -152,7 +206,7 @@ class CharsetWindow(object):
             bbox = {'x': char_button_x[col], 'y': char_button_y[row]}
             (width, height), baseline = cv2.getTextSize(str(char), cv2.FONT_HERSHEY_COMPLEX, char_font_size, thickness)
             text_x = (char_button_x[col][0] + char_button_x[col][1]) // 2 - width // 2
-            text_y = (char_button_y[row][0] + char_button_y[row][1]) // 2  + height // 2
+            text_y = (char_button_y[row][0] + char_button_y[row][1]) // 2 + height // 2
             char_button = {'char': char,
                            'text': char,
                            'thickness': thickness,
@@ -161,7 +215,8 @@ class CharsetWindow(object):
                            'font_size': char_font_size,
                            'mouseover': False,
                            'color': self._LAYOUT['bbox_color']}
-            self._char_buttons.append(char_button)
+
+            self._char_buttons[char] = char_button
 
     def push_button(self, char):
         if char in self.char_states:
@@ -174,10 +229,7 @@ class CharsetWindow(object):
             self.char_states = {c: (c in GOOD_CHAR_SET) for c in self.chars}
         logging.info("CharsetWindow: toggled '%s', now %i chars on", char, len(self.app.char_set))
 
-    def draw(self, image):
-
-        if image.shape[0] != self.size[1] or image.shape[1] != self.size[0]:
-            self.set_size((image.shape[1], image.shape[0]))
+    def _draw(self, image):
 
         def _draw_box(button, color, text_color):
             if color is not None:
@@ -186,13 +238,13 @@ class CharsetWindow(object):
                 cv2.putText(image, button['text'], button['text_pos'],
                             cv2.FONT_HERSHEY_COMPLEX, button['font_size'], text_color, button['thickness'], cv2.LINE_AA)
 
-        for button in self._buttons:
+        for button_text, button in self._buttons.items():
             color = button['color'] if not button['mouseover'] else self._LAYOUT['mouseover_color']
             text_color = self._LAYOUT['text_color'] if not button['mouseover'] else self._LAYOUT['mouseover_color']
             _draw_box(button, color, text_color)
 
-        for char_button in self._char_buttons:
-
+        for _, char_button in self._char_buttons.items():
+            
             if not self.char_states[char_button['char']]:
                 text_color = self._LAYOUT['unused_color']
                 color = self._LAYOUT['unused_color']
@@ -214,53 +266,57 @@ class CharsetWindow(object):
         def _check_button(bbox):
             return bbox['x'][0] <= x <= bbox['x'][1] and bbox['y'][0] <= y <= bbox['y'][1]
 
-        new_mouse_over = None
+        new_mouse_over_text = None
 
-        for button in self._buttons:
+        for button in self._buttons.values():
             if _check_button(button['bbox']):
                 logging.info("Mouse over button: %s", button['text'])
                 button['mouseover'] = True
-                new_mouse_over = button
+                new_mouse_over_text = button['text']
             else:
                 button['mouseover'] = False
 
-        if new_mouse_over is None:
-            for char_button in self._char_buttons:
+        if new_mouse_over_text is None:
+            for char_button in self._char_buttons.values():
                 if _check_button(char_button['bbox']):
                     logging.info("Mouse over char button: %s", char_button['text'])
                     char_button['mouseover'] = True
-                    new_mouse_over = char_button
+                    new_mouse_over_text = char_button['text']
                 else:
                     char_button['mouseover'] = False
-        return new_mouse_over
+                
+                if char_button['char'] == '~':
+                    print("Button ~ mouseover changed to", self._char_buttons['~']['mouseover'])
+
+        return new_mouse_over_text
 
     def on_mouse(self, event, x, y, flags, param):
         if event == cv2.EVENT_MOUSEMOVE:
-            new_mouse_over = self._update_mouseover(x, y)
-            if new_mouse_over is not None and new_mouse_over != self._mouse_over:
-                if new_mouse_over in self._char_buttons and self._mouse_down:
-                    self.push_button(new_mouse_over['text'])
-            self._mouse_over = new_mouse_over
+            new_mouse_over_text = self._update_mouseover(x, y)
+            if new_mouse_over_text is not None and (self._mouse_over_text is None or new_mouse_over_text != self._mouse_over_text):
+                if new_mouse_over_text in self._char_buttons and self._mouse_down:
+                    self.push_button(new_mouse_over_text)
+            self._mouse_over_text = new_mouse_over_text
 
         elif event == cv2.EVENT_LBUTTONDOWN:
             self._mouse_down = True
-            if self._mouse_over in self._buttons or self._mouse_over in self._char_buttons:
-
-                self.push_button(self._mouse_over['text'])
+            if self._mouse_over_text in self._buttons or self._mouse_over_text in self._char_buttons:
+                self.push_button(self._mouse_over_text)
         elif event == cv2.EVENT_LBUTTONUP:
             self._mouse_down = False
 
 
 class FakeApp(object):
     """
-    +---------------------------------------+
-    |                                       |
-    |                                       |
-    |                                       |
-    |                                       |
-    |                                       |
-    |                                       |
-    +---------------------------------------+
+    +-----------+---------------------------+
+    |  Controls |     Cluster view          |
+    |           |                           |
+    |           |                           |
+    |           |                           |
+    +-----------+                           |
+    |  status   |                           |
+    |           |                           |
+    +-----------+---------------------------+
     |                                       |
     |           Charset Window              |
     +---------------------------------------+
@@ -274,12 +330,14 @@ class FakeApp(object):
 
 
 def test_charset_window():
+    init_size = (1000, 300)
     app = FakeApp()
-    window = CharsetWindow(app)
+    cs_window = CharsetWindow(app)
+    # ctrl_window = ControlWindow(app)
     win_name = "Character Set"
     cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(win_name, window.size[0], window.size[1])
-    cv2.setMouseCallback(win_name, window.on_mouse)
+    cv2.resizeWindow(win_name, init_size[0], init_size[1])
+    cv2.setMouseCallback(win_name, cs_window.on_mouse)
 
     def make_blank(size):
         blank = np.zeros((size[1], size[0], 3), dtype=np.uint8)
@@ -293,7 +351,7 @@ def test_charset_window():
             logging.info("Window closed.")
             break
 
-        frame = window.draw(make_blank((current_width, current_height)))
+        frame = cs_window.draw(make_blank((current_width, current_height)))
 
         cv2.imshow(win_name, frame[:, :, ::-1])
         k = cv2.waitKey(10)
@@ -304,8 +362,9 @@ def test_charset_window():
 
 class FontClusterApp(object):
     """
-    
+
     """
+
     def __init__(self):
         self.data = AlphaNumericMNISTData(use_good_subset=False, test_train_split=0.0)
         self.disp_font_ind = 0
