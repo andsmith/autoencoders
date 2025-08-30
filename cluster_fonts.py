@@ -253,6 +253,17 @@ class CharsetWindow(object):
 
 class FakeApp(object):
     """
+    +---------------------------------------+
+    |                                       |
+    |                                       |
+    |                                       |
+    |                                       |
+    |                                       |
+    |                                       |
+    +---------------------------------------+
+    |                                       |
+    |           Charset Window              |
+    +---------------------------------------+
 
     """
 
@@ -292,6 +303,9 @@ def test_charset_window():
 
 
 class FontClusterApp(object):
+    """
+    
+    """
     def __init__(self):
         self.data = AlphaNumericMNISTData(use_good_subset=False, test_train_split=0.0)
         self.disp_font_ind = 0
