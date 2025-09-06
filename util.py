@@ -7,6 +7,26 @@ import seaborn as sns
 import cv2
 
 
+
+def image_from_floats(floats, small=None, big=None):
+    small = floats.min() if small is None else small
+    big = floats.max() if big is None else big
+
+    values = (floats - small) / (big - small) * 255
+    return values.astype(np.uint8)
+
+
+def apply_colormap(floats, colormap=cv2.COLORMAP_JET):
+    """
+    Apply a colormap to an image.
+    :param floats: 2D array of floats
+    :param colormap: cv2 colormap
+    :return: 3D array of uint8
+    """
+    image = image_from_floats(floats)
+    return cv2.applyColorMap(image, colormap)
+
+
 class PointSet2d(object):
     def __init__(self, min_separation):
         self._min_sep = min_separation
@@ -43,6 +63,20 @@ class PointSet2d(object):
             return True
         dists = np.linalg.norm(self.points - point, axis=1)
         return np.min(dists) >= self._min_sep
+
+
+def get_good_point_size(n_points, bbox):
+    # Copied from github:andsmith/ml_demos/spectral_clustering/util.py
+    # returns: number of pixels
+    if n_points > 10000:
+        pts_size = 2
+    elif n_points > 1000:
+        pts_size = 3
+    elif n_points > 100:
+        pts_size = 4
+    else:
+        pts_size = 5
+    return pts_size
 
 
 def _make_orthonormal_basis(dims):

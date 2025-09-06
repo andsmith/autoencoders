@@ -74,6 +74,10 @@ class PCA(object):
             self.d_out = self.d_in
             self.scales = np.std(points, axis=0)
             return self.encode(points)
+        
+        if self._d_input >self._n_train:
+            raise ValueError("PCA not supported when n_samples < n_features (got %i samples, %i features)." %
+                             (self._n_train, self._d_input))
 
         # using SVD:
         U, s, Vh = np.linalg.svd((points - self.means), full_matrices=False)

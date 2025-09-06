@@ -17,8 +17,8 @@ COLOR_OPTIONS = {'unselected': COLORS['GRAY'],
                  'idle': COLORS['DARK_NAVY_RGB'],
                  'held': COLORS['NEON_RED'],
                  'tab': COLORS['DARK_GRAY'],
-                 'active_toggle': COLORS['LIGHT_GRAY'],
-                 'inactive_toggle': COLORS['DARK_NAVY_RGB'],
+                 'active_toggle': COLORS['DARK_NAVY_RGB'],
+                 'inactive_toggle': COLORS['LIGHT_GRAY'],
                  'border': COLORS['DARK_GRAY'], }
 
 
@@ -395,7 +395,7 @@ class Button(Tool):
         y0, y1 = self._text_bbox['y']
         self._text_pos = (x0 + (x1 - x0 - text_dims[0]) // 2, y0 + (y1 - y0 + text_dims[1]) // 2)
 
-    def _render(self, img):
+    def _render(self, img, text=None):
         """
         Render the button.
         """
@@ -408,7 +408,8 @@ class Button(Tool):
         # text box
         cv2.rectangle(img, (self._text_bbox['x'][0], self._text_bbox['y'][0]),
                       (self._text_bbox['x'][1], self._text_bbox['y'][1]), self._colors['idle'], 1)
-        cv2.putText(img, self._text, self._text_pos, self._font, self._font_size, color, 1, cv2.LINE_AA)
+        text = text if text is not None else self._text
+        cv2.putText(img, text, self._text_pos, self._font, self._font_size, color, 1, cv2.LINE_AA)
 
     def _mouse_click(self, x, y):
         """
@@ -445,8 +446,9 @@ class ToggleButton(Button):
     Like a button, but has state (on/off), and renders different color to indicate state, and triggers on unclick.
     """
 
-    def __init__(self, bbox, label, callback, visible=True, border_indent=2, spacing_px=4, default=False):
+    def __init__(self, bbox, label, callback, visible=True, border_indent=2, spacing_px=4, alt_label=None, default=False):
         self._state = default
+        self._alt_label = alt_label
         super().__init__(bbox, label, callback, visible, border_indent, spacing_px)
 
     def _mouse_unclick(self, x, y):
@@ -465,25 +467,36 @@ class ToggleButton(Button):
             return self._colors['held']
         elif self._moused_over:
             return self._colors['mouseover']
-        elif self._state:
+        elif self._state or self._alt_label is not None:
             return self._colors['active_toggle']
         else:
             return self._colors['inactive_toggle']
 
     def render(self, img):
-        if not self._state and self._visible:
-            # draw an X through the box
-            p0 = (self._text_bbox['x'][0], self._text_bbox['y'][0])
-            p1 = (self._text_bbox['x'][1], self._text_bbox['y'][1])
-            p2 = (self._text_bbox['x'][0], self._text_bbox['y'][1])
-            p3 = (self._text_bbox['x'][1], self._text_bbox['y'][0])
-            color = self._colors['inactive_toggle']
-            cv2.line(img, p0, p1, color, 1)
-            cv2.line(img, p2, p3, color, 1)
-        super().render(img)
+        if self._visible:
+            text = None
+
+            if not self._state :
+                if self._alt_label is None:
+                    # draw an X through the box
+                    p0 = (self._text_bbox['x'][0], self._text_bbox['y'][0])
+                    p1 = (self._text_bbox['x'][1], self._text_bbox['y'][1])
+                    p2 = (self._text_bbox['x'][0], self._text_bbox['y'][1])
+                    p3 = (self._text_bbox['x'][1], self._text_bbox['y'][0])
+                    color = self._colors['inactive_toggle']
+                    cv2.line(img, p0, p1, color, 1)
+                    cv2.line(img, p2, p3, color, 1)
+                else: 
+                    text = self._alt_label
+            super()._render(img, text=text)
 
     def get_value(self):
+        if self._alt_label is not None:
+            return self._alt_label if not self._state else self._text
         return self._state
+    
+    def set_value(self, state):
+        self._state = state
 
 
 class RadioButtons(Tool):
