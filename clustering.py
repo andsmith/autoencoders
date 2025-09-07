@@ -101,21 +101,29 @@ class KMeansAlgorithm(ClusteringAlgorithm):
         best_loss = np.inf
         best_means = None
         d = x.shape[1]
-
+        old_cluster_ids = None
         np.random.seed(self.random_state)
         for trial in range(self.n_init):
             random_indices = np.random.choice(x.shape[0], self._k, replace=False)
             means = np.array([self._calc_mean(x[random_indices[i]].reshape(1, d)) for i in range(self._k)])
 
             for iteration in range(self.max_iter):
-                cluster_ids = self._find_closest_means(x, means=means)
+                cluster_ids,_ = self._find_closest_means(x, means=means)
+                n_changed = cluster_ids.size if old_cluster_ids is None else np.sum(cluster_ids != old_cluster_ids)
+                old_cluster_ids = cluster_ids
                 counts = np.bincount(cluster_ids, minlength=self._k)
                 if np.any(counts == 0):
                     if verbose:
                         logging.info("\t\tconverged in %i iterations (empty cluster)!!!!!!!!!!!!", iteration)
                     break
                 means = np.array([self._calc_mean(x[cluster_ids == i].reshape(counts[i], d)) for i in range(self._k)])
-
+                if iteration % 50 == 0 and verbose:
+                    logging.info("\t\titeration %i had %i cluster assignment changes.", iteration, n_changed)
+                    logging.info("\t\titeration %i, cluster sizes: %s", iteration, counts   )
+                if n_changed == 0:
+                    if verbose:
+                        logging.info("\t\tconverged in %i iterations.", iteration)
+                    break
             # Compute loss
             loss = np.sum((x - means[cluster_ids]) ** 2)
             if loss < best_loss:
@@ -149,7 +157,9 @@ class KMeansAlgorithm(ClusteringAlgorithm):
             samples_norm = samples / np.linalg.norm(samples, axis=1, keepdims=True)
             means_norm = means  # Will already be normalized
             dists = 1 - np.dot(samples_norm, means_norm.T)
-        return np.argmin(dists, axis=1)
+        closest_means = np.argmin(dists, axis=1)
+        closest_dists = dists[np.arange(samples.shape[0]), closest_means]
+        return closest_means, closest_dists
 
     def assign(self, x):
         if not self._fit:
@@ -189,16 +199,22 @@ class SpectralAlgorithm(ClusteringAlgorithm):
         self._eigvals = eigvals[idx]
         self._eigvecs = eigvecs[:, idx]
 
-    def fit(self, n_clusters, n_features=None):
+    def fit(self, n_clusters, n_features=None,verbose=True):
         n_features = n_features if n_features is not None else n_clusters
+        if verbose:
+            logging.info("Fitting Spectral clustering with %i clusters, %i features, normalize=%s.  Calculating eigenvectors...",
+                         n_clusters, n_features, self._normalize)
         eig_features = self._eigvecs[:, :n_features]
         if self._normalize:
             # normalize
             eig_features /= np.linalg.norm(eig_features, axis=1)[:, np.newaxis]
 
         # kmeans on eigenvectors
+        logging.info("Fitting KMeans to %s eigenvectors, with %i clusters...", eig_features.shape, n_clusters)
         self._kmeans = KMeans(n_clusters=n_clusters)
         self._kmeans.fit(eig_features)
+        self._kmeans_dists = self._kmeans.transform(eig_features)
+        self._fit = True
 
         # cluster
         cluster_ids = self._kmeans.labels_
@@ -213,7 +229,9 @@ class SpectralAlgorithm(ClusteringAlgorithm):
             raise ValueError("Model has not been fit() yet.")
         # get index of nearest neighbor to x
         n_ind = self._tree.query(x, k=1)[1]
-        return self._kmeans.labels_[n_ind]
+        assignments = self._kmeans.labels_[n_ind]
+        distances = self._kmeans_dists[n_ind, assignments]
+        return assignments, distances
 
 
 def test_render_clustering():

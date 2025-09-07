@@ -40,13 +40,15 @@ def get_mosaic_shape(n_imgs, mosaic_aspect=1.7):
     return n_rows, n_cols
 
 
-def make_digit_mosaic(imgs, mosaic_aspect=1.7):
+def make_digit_mosaic(imgs, mosaic_aspect=1.7, bkg=None):
     n_rows, n_cols = get_mosaic_shape(len(imgs), mosaic_aspect)
     img_side = 28
     img_flat_size = img_side * img_side
     n_channels = imgs[0].shape[-1] if imgs[0].ndim == 3 else None
     img = np.zeros((n_rows*img_side, n_cols*img_side, n_channels), dtype=np.uint8)\
         if n_channels else np.zeros((n_rows*img_side, n_cols*img_side), dtype=np.uint8)
+    if bkg is not None:
+        img[:, :, ...] = bkg
     print(f"Creating mosaic with {n_rows} rows and {n_cols} columns, img shape {img.shape}")
 
     for i, im in enumerate(imgs):
@@ -68,7 +70,7 @@ def make_digit_mosaic(imgs, mosaic_aspect=1.7):
     return img
 
 
-def make_heterog_mosaic(size, imgs, pad_px=6):
+def make_heterog_mosaic(size, imgs, pad_px=6, bkg_color=0):
     """
     Aragnge images of different sizes into a mosaic as tightly as possible using the following algorithm:
     1. Sort images by size (largest to smallest)
@@ -99,6 +101,8 @@ def make_heterog_mosaic(size, imgs, pad_px=6):
     else:
         img = np.ones((mosaic_height, mosaic_width, imgs[0].shape[2]), dtype=np.uint8) * 255  # White background
 
+    img[:, :, ...] = bkg_color
+
     x, y = pad_px, pad_px
     row_height = 0
     placed = [False] * n_imgs
@@ -128,7 +132,7 @@ def make_heterog_mosaic(size, imgs, pad_px=6):
     return img, bboxes
 
 
-def make_heterog_mosaic_autosize(imgs, mosaic_aspect=1.7, pad_px=6):
+def make_heterog_mosaic_autosize(imgs, mosaic_aspect=1.7, pad_px=6, bkg_color=0):
     min_side = min(max(im.shape[0], im.shape[1]) for im in imgs)
     init_size = (int(min_side*mosaic_aspect+pad_px*2), int(min_side+pad_px*2))
     done = False
@@ -163,7 +167,7 @@ def test_make_heterog_mosaic():
     plt.show()
 
 
-def make_cluster_image(tiles, distances, n_max=100, aspect=1.7):
+def make_cluster_image(tiles, distances, n_max=100, aspect=1.7, bg_color=None):
     """
     show central third, middle third, and outer-most third of tiles
     :param tiles: N x 768 array of intensities (floats in [0,1])
@@ -185,11 +189,11 @@ def make_cluster_image(tiles, distances, n_max=100, aspect=1.7):
         middle = tiles[tiles.shape[0]//3:tiles.shape[0]//3 + n_max//3, :]
         worst = tiles[-(n_max//3):, :]
         tiles = np.vstack((best, middle, worst))
-    img = make_digit_mosaic((tiles*768).astype(np.uint8), mosaic_aspect=aspect)
+    img = make_digit_mosaic(tiles.astype(np.uint8), mosaic_aspect=aspect, bkg=bg_color)
     return img
 
 
-def make_assign_gallery(size, tiles, distances, assignments, n_max=200, pad_px=10):
+def make_assign_gallery(size, tiles, distances, assignments, n_max=200, pad_px=10, bgk_color=255):
     """
     Create a gallery of cluster images.
     :param size: (width, height) of output image
@@ -203,11 +207,11 @@ def make_assign_gallery(size, tiles, distances, assignments, n_max=200, pad_px=1
 
     cluster_ids = np.unique(assignments)
     n_clusters = len(cluster_ids)
-    images = [make_cluster_image(tiles[assignments == k], distances[assignments == k], n_max=n_max, aspect=1.0)
+    images = [make_cluster_image(tiles[assignments == k], distances[assignments == k], n_max=n_max, aspect=1.0, bg_color=bgk_color)
               for k in cluster_ids]
     aspect = size[0]/size[1]
-    
-    img, cluster_bboxes = make_heterog_mosaic_autosize(images, pad_px=pad_px, mosaic_aspect=aspect)
+
+    img, cluster_bboxes = make_heterog_mosaic_autosize(images, pad_px=pad_px, mosaic_aspect=aspect, bkg_color=bgk_color)
 
     return img, cluster_bboxes
 

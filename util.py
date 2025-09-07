@@ -167,6 +167,20 @@ def test_make_data(d=3, plot=True):
         plt.tight_layout()
         plt.show()
 
+def scale_bbox(bbox, scale):
+    """
+    Scale a bounding box by a given factor.
+    :param bbox: Dictionary with 'x' and 'y' keys containing tuples (min, max)
+    :param scale: Tuple (scale_x, scale_y) to scale the bbox
+    :return: Scaled bounding box
+    """
+    x_min, x_max = bbox['x']
+    y_min, y_max = bbox['y']
+    new_bbox = {
+        'x': (int(x_min * scale[0]), int(x_max * scale[0])),
+        'y': (int(y_min * scale[1]), int(y_max * scale[1]))
+    }
+    return new_bbox
 
 def get_font_size(text, size_wh, incl_baseline=False, max_scale=10.0, pad=5, font=cv2.FONT_HERSHEY_DUPLEX):
     """
@@ -194,6 +208,19 @@ def get_font_size(text, size_wh, incl_baseline=False, max_scale=10.0, pad=5, fon
 
     return font_scale, (text_x, text_y), thickness
 
+def get_best_font_size(lines, size_wh, *args, **kwargs):
+    """
+    Get the largest font that will fit all lines in the given box size.
+    Call get_font_size on each line and return the smallest font size, thickness.
+    """
+    best_scale = kwargs.get('max_scale', 10.0)
+    best_thickness = 1
+    for line in lines:
+        scale, _, thickness = get_font_size(line, size_wh, *args, **kwargs)
+        if scale < best_scale:
+            best_scale = scale
+            best_thickness = thickness
+    return best_scale, best_thickness
 
 def test_get_font_size():
     strings = ['#','test_string 1']
