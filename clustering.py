@@ -2,9 +2,10 @@ import numpy as np
 from shapely import points
 from sklearn.cluster import KMeans
 from abc import ABC, abstractmethod
-from util import get_good_point_size
+from util import get_good_point_size, write_lines
 import logging
-
+import cv2
+        
 
 class ClusteringAlgorithm(ABC):
     """
@@ -13,7 +14,7 @@ class ClusteringAlgorithm(ABC):
 
     def __init__(self, name, k):
         self._name = name
-        self._k = k
+        self.k = k
         self._fit = False
 
     @abstractmethod
@@ -38,8 +39,14 @@ class ClusteringAlgorithm(ABC):
         return self._fit
 
     def get_k(self):
-        return self._k
+        return self.k
 
+    def set_k(self, k):
+        if self.k != k:
+            self.k = k
+            self._fit = False
+            self.means = None
+            self.loss = None
 
 def render_clustering(img, points, cluster_ids, colors, clip_unit=True, margin_px=5):
     """
@@ -84,19 +91,20 @@ class KMeansAlgorithm(ClusteringAlgorithm):
         """
         super().__init__('KMeans', k)
         # self._kmeans = KMeans(n_clusters=k)
-        self._which = distance_metric
+        self.which = distance_metric
         self.means = None
         self.max_iter = max_iter
         self.n_init = n_init
         self.random_state = random_state
         self.loss = None
 
+
     def fit(self, x, verbose=False):
         if self._fit:
             logging.warning("Model has already been fit, refitting.")
         if verbose:
             logging.info("Fitting KMeans with k=%i, distance_metric=%s, n_samples=%i, dim=%i",
-                         self._k, self._which, x.shape[0], x.shape[1])
+                         self.k, self.which, x.shape[0], x.shape[1])
         self._fit = True
         best_loss = np.inf
         best_means = None
@@ -104,19 +112,19 @@ class KMeansAlgorithm(ClusteringAlgorithm):
         old_cluster_ids = None
         np.random.seed(self.random_state)
         for trial in range(self.n_init):
-            random_indices = np.random.choice(x.shape[0], self._k, replace=False)
-            means = np.array([self._calc_mean(x[random_indices[i]].reshape(1, d)) for i in range(self._k)])
+            random_indices = np.random.choice(x.shape[0], self.k, replace=False)
+            means = np.array([self._calc_mean(x[random_indices[i]].reshape(1, d)) for i in range(self.k)])
 
             for iteration in range(self.max_iter):
                 cluster_ids,_ = self._find_closest_means(x, means=means)
                 n_changed = cluster_ids.size if old_cluster_ids is None else np.sum(cluster_ids != old_cluster_ids)
                 old_cluster_ids = cluster_ids
-                counts = np.bincount(cluster_ids, minlength=self._k)
+                counts = np.bincount(cluster_ids, minlength=self.k)
                 if np.any(counts == 0):
                     if verbose:
                         logging.info("\t\tconverged in %i iterations (empty cluster)!!!!!!!!!!!!", iteration)
                     break
-                means = np.array([self._calc_mean(x[cluster_ids == i].reshape(counts[i], d)) for i in range(self._k)])
+                means = np.array([self._calc_mean(x[cluster_ids == i].reshape(counts[i], d)) for i in range(self.k)])
                 if iteration % 50 == 0 and verbose:
                     logging.info("\t\titeration %i had %i cluster assignment changes.", iteration, n_changed)
                     logging.info("\t\titeration %i, cluster sizes: %s", iteration, counts   )
@@ -143,16 +151,16 @@ class KMeansAlgorithm(ClusteringAlgorithm):
         if len(points) == 0:
             return None
         mean = np.mean(points, axis=0)
-        if self._which == 'cosine':
+        if self.which == 'cosine':
             mean /= np.linalg.norm(mean)
         return mean
 
     def _find_closest_means(self, samples, means=None):
         if means is None:
             means = self.means
-        if self._which == 'euclidean':
+        if self.which == 'euclidean':
             dists = np.linalg.norm(samples[:, np.newaxis, :] - means[np.newaxis, :, :], axis=2)
-        elif self._which == 'cosine':
+        elif self.which == 'cosine':
             # Cosine distance
             samples_norm = samples / np.linalg.norm(samples, axis=1, keepdims=True)
             means_norm = means  # Will already be normalized
@@ -165,22 +173,25 @@ class KMeansAlgorithm(ClusteringAlgorithm):
         if not self._fit:
             raise ValueError("Model has not been fit yet.")
         return self._find_closest_means(x)
+    
+    def draw_stats(self, image, bbox, color):
+        if not self._fit:
+            lines = ["Cluster for stats"]
+        else:
+            lines = [f"KMeans: k={self.k}",
+                     f'loss={self.loss:.2f}']
+        write_lines(image, bbox, lines, 5, color=color)
 
 
 class SpectralAlgorithm(ClusteringAlgorithm):
-    def __init__(self, sim_graph, normalize=False):
-        """
-        :param sim_graph: similarity graph
-        """
+    def __init__(self, n_clusters, normalize=False):
         super().__init__('Spectral', None)
+        self._n_clusters = n_clusters
         self._normalize = normalize
-        self._g = sim_graph
-        self._tree = self._g.get_tree()  # for clustering new points
-        self._solve()
         self._kmeans = None
 
-    def _solve(self):
-        w = self._g.get_matrix().copy()
+    def _solve(self, g):
+        w = g.get_matrix().copy()
         # set diagonal to zero
         np.fill_diagonal(w, 0)
         # compute the Laplacian matrix:
@@ -196,22 +207,25 @@ class SpectralAlgorithm(ClusteringAlgorithm):
 
         # sort by eigenvalues
         idx = eigvals.argsort()
-        self._eigvals = eigvals[idx]
-        self._eigvecs = eigvecs[:, idx]
+        eigvals = eigvals[idx]
+        eigvecs = eigvecs[:, idx]
+        return eigvals, eigvecs
 
-    def fit(self, n_clusters, n_features=None,verbose=True):
-        n_features = n_features if n_features is not None else n_clusters
+    def fit(self, sim_graph ,verbose=True):
+        self._tree = sim_graph.get_tree()  # to cluster new points
+
+        self._eigvals, self._eigvecs = self._solve(sim_graph)
         if verbose:
             logging.info("Fitting Spectral clustering with %i clusters, %i features, normalize=%s.  Calculating eigenvectors...",
-                         n_clusters, n_features, self._normalize)
-        eig_features = self._eigvecs[:, :n_features]
+                         self._n_clusters, self._n_clusters, self._normalize)
+        eig_features = self._eigvecs[:, :self._n_clusters]
         if self._normalize:
             # normalize
             eig_features /= np.linalg.norm(eig_features, axis=1)[:, np.newaxis]
 
         # kmeans on eigenvectors
-        logging.info("Fitting KMeans to %s eigenvectors, with %i clusters...", eig_features.shape, n_clusters)
-        self._kmeans = KMeans(n_clusters=n_clusters)
+        logging.info("Fitting KMeans to %s eigenvectors, with %i clusters...", eig_features.shape, self._n_clusters)
+        self._kmeans = KMeans(n_clusters=self._n_clusters)
         self._kmeans.fit(eig_features)
         self._kmeans_dists = self._kmeans.transform(eig_features)
         self._fit = True

@@ -8,7 +8,7 @@ from util import image_from_floats, apply_colormap
 from abc import ABC, abstractmethod
 from scipy.spatial import KDTree
 import logging
-from util import fit_spaced_intervals, get_font_size, get_best_font_size
+from util import fit_spaced_intervals, get_font_size, get_best_font_size, write_lines
 from scipy.sparse.csgraph import connected_components
 
 
@@ -28,21 +28,30 @@ def get_kind_from_name(names, name):
 
 class SimilarityGraph(object):
     """
-    Build a similarity graph from a set of points using euclidean distances.
+    Build a similarity graph from a set of points using euclidean or cosine distances.
     Adjust parameters before extracting laplacian.
 
     """
 
-    def __init__(self, points):
+    def __init__(self, distance_metric='euclidean'):
         """
         Construct a similarity graph from points in the unit square.
         :param points: 2D numpy array of points
         :param colormap: colormap to use for the similarity matrix image
         """
-        self._points = points
+        self.metric = distance_metric
+        self._points = None
         self._mat = None
         # print("Built similarit matrix, weights in range [%f, %f], frac_nonzero=%.5f" % (
         # np.min(self._mat), np.max(self._mat), np.count_nonzero(self._mat) / self._mat.size))
+
+    def fit(self, points):
+        self._points = points
+        self._mat = self._build()
+
+    def get_dists(self, points):
+        dists = squareform(pdist(points, metric=self.metric))
+        return dists
 
     @abstractmethod
     def _build(self):
@@ -61,7 +70,7 @@ class SimilarityGraph(object):
         pass
 
     @abstractmethod
-    def draw_stats(self, img, bbox, pad_px=5):
+    def draw_stats(self, img, bbox, pad_px=5, color=(0, 0, 0)):
         """
         Draw stats about the similarity graph in the given bounding box.
         :param img: image to draw on
@@ -69,22 +78,6 @@ class SimilarityGraph(object):
         :param pad_px: padding in pixels
         """
         pass
-
-    def _write_lines(self, img, bbox, lines, pad_px):
-        """
-        """
-        y_span = bbox['y'][0] + pad_px, bbox['y'][1]-pad_px
-        x_span = bbox['x'][0] + pad_px, bbox['x'][1]-pad_px
-        txt_w, txt_h = x_span[1]-x_span[0], y_span[1]-y_span[0]
-
-        n_lines = len(lines)
-        line_y = fit_spaced_intervals(y_span, n_lines, spacing_fraction=0, fill_extent=False)
-        line_wh = (txt_w, line_y[0][1]-line_y[0][0])
-
-        font_size, font_thick = get_best_font_size(lines, line_wh, font=cv2.FONT_HERSHEY_SIMPLEX, )
-        for i, line in enumerate(lines):
-            org = (x_span[0], int(line_y[i][0] + (line_y[i][1]-line_y[i][0]+font_size)//2))
-            cv2.putText(img, line, org, cv2.FONT_HERSHEY_SIMPLEX, font_size, (0, 0, 0), font_thick, cv2.LINE_AA)
 
     def draw_graph(self, img):
         """
@@ -118,25 +111,35 @@ class SimilarityGraph(object):
         dstd = np.std(degrees)
         # components
         n_components, labels = connected_components(mat_thresh)
-        return [' n_components=%i'% n_components,
-                ' n_nodes=%i'% n,
-                ' n_edges=%i'% m,
-                ' deg_mean=%.1f'% dmean,
-                ' deg_median=%i'% dmed,
-                ' deg_range=[%i, %i]'% (dmin, dmax)]
+        return [' n_components=%i' % n_components,
+                ' n_nodes=%i' % n,
+                ' n_edges=%i' % m,
+                ' deg_mean=%.1f' % dmean,
+                ' deg_median=%i' % dmed,
+                ' deg_range=[%i, %i]' % (dmin, dmax)]
+
 
 class EpsilonSimGraph(SimilarityGraph):
 
-    def __init__(self, points, epsilon_rel=0.5):
-        super().__init__(points)
-        self._dists = squareform(pdist(self._points))
+    def __init__(self, epsilon_rel=0.5, distance_metric='euclidean'):
+
+        self._dists = None
         self._epsilon_rel = epsilon_rel
         self._epsilon = None
 
-    def set_param(self, epsilon_rel=None):
+        super().__init__(distance_metric=distance_metric)
+
+    def fit(self, points):
+        self._dists = self.get_dists(points)
+        super().fit(points)
+
+    def set_param(self, epsilon_rel=None,distance_metric=None):
         if epsilon_rel is not None:
             self._epsilon_rel = epsilon_rel
-        self._mat = self._build()
+        if distance_metric is not None:
+            self._distance_metric = distance_metric
+        if self._points is not None:
+            self._mat = self._build()
 
     def _build(self):
         """
@@ -144,14 +147,14 @@ class EpsilonSimGraph(SimilarityGraph):
         I.e., two points are connected if their distance is less than epsilon, all 
         weight 1 or 0.
         """
-        dmin, dmax = np.min(self._dists[self._dists > 0]), np.max(self._dists[self._dists<np.Inf])
+        dmin, dmax = np.min(self._dists[self._dists > 0]), np.max(self._dists[self._dists < np.Inf])
         self._epsilon = dmin + self._epsilon_rel * (dmax - dmin)
         logging.info("Setting epsilon=%.5f using rel param %.3f to interpolate range[%.3f, %.3f]" % (
             self._epsilon, self._epsilon_rel, dmin, dmax))
         sim_matrix = np.zeros(self._dists.shape)
         sim_matrix[self._dists <= self._epsilon] = 1
         # remove self-loops
-        np.fill_diagonal(sim_matrix, 0)
+        np.fill_diagonal(sim_matrix, np.Inf)
         return sim_matrix
 
     def make_img(self, colormap=None):
@@ -159,7 +162,7 @@ class EpsilonSimGraph(SimilarityGraph):
         img = cv2.merge([img, img, img])
         return img
 
-    def draw_stats(self, img, bbox, pad_px=5):
+    def draw_stats(self, img, bbox, pad_px=5, color=(0, 0, 0)):
         """
         Stats:
            * Number of nodes, edges
@@ -170,12 +173,13 @@ class EpsilonSimGraph(SimilarityGraph):
         :param bbox: bounding box to draw stats in
         """
         if self._mat is None:
-            raise ValueError("Similarity matrix not built yet, set parameters first.")
-        graph_stat_lines = self._get_graph_stats()
-        lines = ['Epsilon Similarity Graph',
-                 ' epsilon-rel:  %.2f' % (self._epsilon_rel, ),
-                 ' epsilon:      %.3f' % (self._epsilon, ),] + graph_stat_lines
-        self._write_lines(img, bbox, lines, pad_px)
+            lines = ["Cluster for stats"]
+        else:
+            graph_stat_lines = self._get_graph_stats()
+            lines = ['Epsilon Similarity Graph',
+                     ' epsilon-rel:  %.2f' % (self._epsilon_rel, ),
+                     ' epsilon:      %.3f' % (self._epsilon, ),] + graph_stat_lines
+        write_lines(img, bbox, lines, pad_px, color=color)
 
 
 def test_epsilon_param_update():
@@ -183,12 +187,13 @@ def test_epsilon_param_update():
     From random points, show the "draw_stats" image as the value is adusted by the keyboard.
     """
     points = np.random.rand(1500, 10)
-    sim_graph = EpsilonSimGraph(points)
+    sim_graph = EpsilonSimGraph()
+    sim_graph.fit(points)
     epsilon_rel = 0.5
     img_size_wh = (300, 350)
     blank = np.zeros((img_size_wh[1], img_size_wh[0], 3), dtype=np.uint8)
     blank[:] = 250, 250, 250
-    bbox = {'x':(0, img_size_wh[0]), 'y':(0, img_size_wh[1])}
+    bbox = {'x': (0, img_size_wh[0]), 'y': (0, img_size_wh[1])}
 
     sim_graph.set_param(epsilon_rel=epsilon_rel)
 
@@ -211,17 +216,24 @@ def test_epsilon_param_update():
             epsilon_rel = max(0, min(1, epsilon_rel))
             print("Setting epsilon_rel=%.3f" % (epsilon_rel, ))
 
-            sim_graph.set_param(epsilon_rel=epsilon_rel)   
+            sim_graph.set_param(epsilon_rel=epsilon_rel)
+
+    cv2.destroyAllWindows()
+
 
 class FullSimGraph(SimilarityGraph):
-    def __init__(self, points,sigma_rel =0.5):
+    def __init__(self, sigma_rel=0.5, distance_metric='euclidean'):
         """
         Construct a similarity graph using the full similarity function.
-        """        
-        super().__init__(points)
-        self._dists = squareform(pdist(self._points))
+        """
+        super().__init__(distance_metric=distance_metric)
+        self._dists = None
         self._sigma_rel = sigma_rel
         self._sigma = None
+
+    def fit(self, points):
+        self._dists = self.get_dists(points)
+        super().fit(points)
 
     def _build(self):
         """
@@ -229,7 +241,7 @@ class FullSimGraph(SimilarityGraph):
         Interpolate between 0.0
         """
         _, dmax = np.min(self._dists[self._dists > 0]), np.max(self._dists)
-        dmin=0.001
+        dmin = 0.001
         self._sigma = dmin + self._sigma_rel * (dmax - dmin)
         logging.info("Setting sigma=%.5f using rel param %.3f to interpolate range[%.3f, %.3f]" % (
             self._sigma, self._sigma_rel, dmin, dmax))
@@ -240,13 +252,16 @@ class FullSimGraph(SimilarityGraph):
     def make_img(self, colormap=None):
         img = apply_colormap(self._mat, colormap)
         return img
-    
-    def set_param(self, sigma_rel=None):
+
+    def set_param(self, sigma_rel=None,distance_metric=None):
         if sigma_rel is not None:
             self._sigma_rel = sigma_rel
-        self._mat = self._build()
+        if distance_metric is not None:
+            self._distance_metric = distance_metric
+        if self._points is not None:
+            self._mat = self._build()
 
-    def draw_stats(self, img, bbox, pad_px=5, tol_rel=0.1):
+    def draw_stats(self, img, bbox, pad_px=5, tol_rel=0.01, color=(0, 0, 0)):
         """
         Stats:
            * Number of nodes, edges
@@ -259,25 +274,29 @@ class FullSimGraph(SimilarityGraph):
         :param tol_rel: relative tolerance for considering an edge to exist (wrt sd. of )
         """
         if self._mat is None:
-            raise ValueError("Similarity matrix not built yet, set parameters first.")
-        tol_abs = tol_rel * np.std(self._mat)
-        graph_stat_lines = self._get_graph_stats(wt_threshold=tol_abs)
-        lines = ['Full Similarity Graph',
-                 ' sigma-rel:  %.2f' % (self._sigma_rel, ),
-                 ' sigma:      %.3f' % (self._sigma, )] + graph_stat_lines
-        self._write_lines(img, bbox, lines, pad_px)
+            lines = ["Cluster for stats"]
+        else:
+
+            tol_abs = tol_rel * np.std(self._mat)
+            graph_stat_lines = self._get_graph_stats(wt_threshold=tol_abs)
+            lines = ['Full Similarity Graph',
+                     ' sigma-rel:  %.2f' % (self._sigma_rel, ),
+                     ' sigma:      %.3f' % (self._sigma, )] + graph_stat_lines
+        write_lines(img, bbox, lines, pad_px, color=color)
+
 
 def test_full_param_update():
     """
     From random points, show the "draw_stats" image as the value is adusted by the keyboard.
     """
     points = np.random.rand(500, 10)
-    sim_graph = FullSimGraph(points, sigma_rel=0.0)
+    sim_graph = FullSimGraph(sigma_rel=0.0)
+    sim_graph.fit(points)
     sigma_rel = 0.5
     img_size_wh = (300, 350)
     blank = np.zeros((img_size_wh[1], img_size_wh[0], 3), dtype=np.uint8)
     blank[:] = 250, 250, 250
-    bbox = {'x':(0, img_size_wh[0]), 'y':(0, img_size_wh[1])}
+    bbox = {'x': (0, img_size_wh[0]), 'y': (0, img_size_wh[1])}
 
     sim_graph.set_param(sigma_rel=sigma_rel)
 
@@ -302,10 +321,11 @@ def test_full_param_update():
 
             sim_graph.set_param(sigma_rel=sigma_rel)
 
+    cv2.destroyAllWindows()
 
 
 class NNSimGraph(SimilarityGraph):
-    def __init__(self, points):
+    def __init__(self, k=5, mutual=False):
         """
         Construct a similarity graph using K-nearest neighbors.
         :param points: 2D numpy array of points
@@ -313,12 +333,17 @@ class NNSimGraph(SimilarityGraph):
         :param mutual: if True, only connect if both points are among each other's K-nearest neighbors,
             otherwise connect if either is among the other's K-nearest neighbors.
         """
-        super().__init__(points)
-
-    def set_param(self, k, mutual):
         self._k = k
         self._mutual = mutual
-        self._mat = self._build()
+        super().__init__(distance_metric=None)
+
+    def set_param(self, k, mutual, distance_metric=None):
+        self._k = k
+        self._mutual = mutual
+        if distance_metric is not None:
+            self._distance_metric = distance_metric
+        if self._points is not None:
+            self._mat = self._build()
 
     def _build(self):
         """
@@ -343,11 +368,13 @@ class NNSimGraph(SimilarityGraph):
         return edge_mat
 
     def make_img(self, colormap=None):
+        if self._mat is None:
+            return np.zeros((10, 10, 3), dtype=np.uint8)
         img = image_from_floats(self._mat, 0, 1)
         img = cv2.merge([img, img, img])
         return img
-    
-    def draw_stats(self, img, bbox, pad_px=5):
+
+    def draw_stats(self, img, bbox, pad_px=5, color=(0, 0, 0)):
         """
         Stats:
            * Number of nodes, edges
@@ -358,32 +385,35 @@ class NNSimGraph(SimilarityGraph):
         :param bbox: bounding box to draw stats in
         """
         if self._mat is None:
-            raise ValueError("Similarity matrix not built yet, set parameters first.")
-        graph_stat_lines = self._get_graph_stats()
-        lines = ['K-NN Similarity Graph',
-                 ' K: %d' % (self._k, ),
-                 ' mutual: %s' % (self._mutual, )] + graph_stat_lines
-        self._write_lines(img, bbox, lines, pad_px) 
+            lines = ["Cluster for stats"]
+        else:
+            graph_stat_lines = self._get_graph_stats()
+            lines = ['K-NN Similarity Graph',
+                     ' K: %d' % (self._k, ),
+                     ' mutual: %s' % (self._mutual, )] + graph_stat_lines
+        write_lines(img, bbox, lines, pad_px, color=color)
+
+
 def test_soft_nn_sim():
     points = np.random.rand(500, 10)
-    sim_graph = NNSimGraph(points)
+    sim_graph = NNSimGraph()
     img_size_wh = (300, 350)
     blank = np.zeros((img_size_wh[1], img_size_wh[0], 3), dtype=np.uint8)
     blank[:] = 250, 250, 250
-    bbox = {'x':(0, img_size_wh[0]), 'y':(0, img_size_wh[1])}
+    bbox = {'x': (0, img_size_wh[0]), 'y': (0, img_size_wh[1])}
     k = 5
-    mututal=True
+    mututal = True
     sim_graph.set_param(k=k, mutual=mututal)
 
     while True:
         frame = blank.copy()
-        sim_graph.draw_stats(frame, bbox)
+        sim_graph.draw_stats(frame, bbox, color=(0, 0, 0))
         cv2.imshow("Soft-NN Similarity Graph", frame)
         sim_mat = sim_graph.make_img()
         cv2.imshow("Similarity Matrix", sim_mat)
         key = cv2.waitKey(1)
         if key == ord('q'):
-            break   
+            break
         elif key == ord('m'):
             mututal = not mututal
             print("Setting mutual=%s" % (mututal, ))
@@ -396,6 +426,12 @@ def test_soft_nn_sim():
             k = max(1, k-1)
             print("Setting k=%i" % (k, ))
             sim_graph.set_param(k=k, mutual=mututal)
+        elif key == ord('f'):
+            sim_graph.fit(points)
+
+
+    cv2.destroyAllWindows()
+
 
 # labels for slider param for different simgraph types
 SIMGRAPH_PARAM_NAMES = {SimilarityGraphTypes.NN: "N-nearest",
@@ -407,7 +443,7 @@ SIMGRAPH_KIND_NAMES = {SimilarityGraphTypes.NN: "N-nearest",
                        SimilarityGraphTypes.FULL: "Full"}
 
 
-
 if __name__ == "__main__":
     test_soft_nn_sim()
-    # test_soft_nn_sim()
+    test_epsilon_param_update()
+    test_full_param_update()

@@ -41,12 +41,25 @@ import os
 import sys
 import argparse
 import pprint
-from sklearn.cluster import KMeans, AgglomerativeClustering
 from mnist import AlphaNumericMNISTData
-from util import fit_spaced_intervals, draw_bbox, get_font_size
+from util import fit_spaced_intervals, draw_bbox, get_font_size,scale_bbox
 from abc import ABC, abstractmethod
 from tools import RadioButtons, Slider, Button, ToggleButton
+from clustering import KMeansAlgorithm, SpectralAlgorithm
+from similarity import EpsilonSimGraph, FullSimGraph, NNSimGraph
+from img_util import make_assign_gallery
 
+SIM_GRAPHS = {'Epsilon': {'type':EpsilonSimGraph,
+                          'param': 'epsilon_rel'},
+              'KNN': {'type':NNSimGraph,
+                      'param': 'k'},
+              'Full': {'type':FullSimGraph,
+                       'param': 'sigma_rel'}}
+
+ALGS = {'KMeans': KMeansAlgorithm,
+        'Spectral': SpectralAlgorithm}
+DISTANCE_LABELS = {'euclidean':"EUC-D", 
+                   F'cosine':'COS-D'}
 
 class ClusterWindow(ABC):
     def __init__(self, app, bbox_rel=None):
@@ -122,13 +135,13 @@ class ControlWindow(ClusterWindow):
             |   CLUSTER FONTS    |  <- button
             +--------------------+
     """
-    _LAYOUT = {'indent_px': 10,
+    _LAYOUT = {'indent_px': 0,
                'area_names': ['alg', 'param', 'sim-graph', 'sim-param', 'action'],
                'area_weights': [2, 3, 3.5, 1.5, 1.],  # 5 vertical areas of the control window
                'pad_weight': .25}
-    
-    _ALGORITHMS = ['KMeans', 'Spectral']
-    _SIMGRAPHS = ['Epsilon', 'KNN', 'Full']
+
+    _ALGORITHMS = [k for k in ALGS.keys()]
+    _SIMGRAPHS = [k for k in SIM_GRAPHS.keys()]
 
     _PARAM_RANGES = {'K': (2, 42),
                      'knn_k': (1, 30),
@@ -137,24 +150,33 @@ class ControlWindow(ClusterWindow):
 
     def __init__(self, app, bbox_rel=None):
         super().__init__(app, bbox_rel)
-        self._widgets = None
+        self._cur_alg = None
+        self.widgets = None
 
     def _init_widgets(self):
         int_fmt_str = ": %i"
-        self._widgets = {
+        self.widgets = {
             'alg': RadioButtons(self._area_bboxes['alg'], title='Algorithm', callback=self._alg_change,
                                 options=self._ALGORITHMS),
-            'k_slider': Slider(self._k_slider_bbox, label='N. Clusters', callback=self._param_change, default=2, range=self._PARAM_RANGES['K'], format_str=int_fmt_str),
-            'pca_slider': Slider(self._pca_slider_bbox, label='N. PCA Dims', callback=self._param_change, default=100, range=self._PARAM_RANGES['PCA'], format_str=int_fmt_str),
-            'whiten_toggle': ToggleButton(self._whiten_toggle_bbox, label='Norm', callback=self._param_change),
+            'k_slider': Slider(self._k_slider_bbox, label='N. Clusters', callback=self._k_change, default=2, range=self._PARAM_RANGES['K'], format_str=int_fmt_str),
+            'pca_slider': Slider(self._pca_slider_bbox, label='PCA Dims', callback=self._preproc_change, default=100, range=self._PARAM_RANGES['PCA'], format_str=int_fmt_str),
+            'whiten_toggle': ToggleButton(self._whiten_toggle_bbox, label='Norm', callback=self._preproc_change),
             'simgraph-picker': RadioButtons(self._area_bboxes['sim-graph'], title='Similarity Graph', callback=self._alg_change,
                                             options=self._SIMGRAPHS),
             'epsilon_sigma': Slider(self._simgraph_param_full_bbox, label='Epsilon/Sigma', callback=self._param_change, default=0.05, range=self._PARAM_RANGES['epsilon_sigma']),
             'knn_k': Slider(self._simgraph_param_split_bbox, label='KNN K', callback=self._param_change, default=5, range=self._PARAM_RANGES['knn_k'], format_str=int_fmt_str),
             'knn_mutual_toggle': ToggleButton(self._simgraph_toggle_bbox, label='Mutual', callback=self._param_change),
-
-            'action': Button(self._area_bboxes['action'], label='Cluster Fonts', callback=self._run),
+            'dist_metric_toggle': ToggleButton(self._dist_metric_toggle_bbox, 
+                                               label=DISTANCE_LABELS['euclidean'], 
+                                               alt_label=DISTANCE_LABELS['cosine'], 
+                                               callback=self._param_change),
+            'run': Button(self._run_bbox, label='Cluster', callback=self._run, border_indent=8),
+            'save': Button(self._save_bbox, label='Save', callback=self.app.save_clusters, border_indent=6)
         }
+        # set defaults here
+        self.widgets['dist_metric_toggle'].set_value(DISTANCE_LABELS['euclidean'])
+        self._cur_alg = self.widgets['alg'].get_value()
+        self.app.refresh_alg()
 
     def resize(self, new_size):
         left, right = int(self._bbox_rel['x'][0] * new_size[0]), int(self._bbox_rel['x'][1] * new_size[0])
@@ -174,35 +196,40 @@ class ControlWindow(ClusterWindow):
 
         # THe slider areas need to be split
         self._k_slider_bbox, temp = split_bbox(self._area_bboxes['param'], weight=0.5, orient='h')
-        self._pca_slider_bbox, self._whiten_toggle_bbox = split_bbox(temp, weight=0.66, orient='v')
+        self._pca_slider_bbox, temp = split_bbox(temp, weight=0.66, orient='v')
+        self._whiten_toggle_bbox, self._dist_metric_toggle_bbox = split_bbox(temp, weight=0.5, orient='h')
         self._simgraph_param_split_bbox, self._simgraph_toggle_bbox = split_bbox(
             self._area_bboxes['sim-param'], weight=0.75, orient='v')
         self._simgraph_param_full_bbox = self._area_bboxes['sim-param']
+        self._run_bbox, self._save_bbox = split_bbox(self._area_bboxes['action'], weight=0.66, orient='v')
 
         # initialize or move widgets
-        if self._widgets is None:
+        if self.widgets is None:
             self._init_widgets()
             self._alg_change(None)  # for ui consistency
         else:
-            self._widgets['alg'].move_to(self._area_bboxes['alg'])
-            self._widgets['k_slider'].move_to(self._k_slider_bbox)
-            self._widgets['pca_slider'].move_to(self._pca_slider_bbox)
-            self._widgets['whiten_toggle'].move_to(self._whiten_toggle_bbox)
-            self._widgets['simgraph-picker'].move_to(self._area_bboxes['sim-graph'])
-            self._widgets['epsilon_sigma'].move_to(self._simgraph_param_full_bbox)
-            self._widgets['knn_k'].move_to(self._simgraph_param_split_bbox)
-            self._widgets['knn_mutual_toggle'].move_to(self._simgraph_toggle_bbox)
-            self._widgets['action'].move_to(self._area_bboxes['action'])
+            self.widgets['alg'].move_to(self._area_bboxes['alg'])
+            self.widgets['k_slider'].move_to(self._k_slider_bbox)
+            self.widgets['pca_slider'].move_to(self._pca_slider_bbox)
+            self.widgets['whiten_toggle'].move_to(self._whiten_toggle_bbox)
+            self.widgets['dist_metric_toggle'].move_to(self._dist_metric_toggle_bbox)
+            self.widgets['simgraph-picker'].move_to(self._area_bboxes['sim-graph'])
+            self.widgets['epsilon_sigma'].move_to(self._simgraph_param_full_bbox)
+            self.widgets['knn_k'].move_to(self._simgraph_param_split_bbox)
+            self.widgets['knn_mutual_toggle'].move_to(self._simgraph_toggle_bbox)
+            self.widgets['run'].move_to(self._run_bbox)
+            self.widgets['save'].move_to(self._save_bbox)
 
     def get_params(self):
-        return {'alg': self._widgets['alg'].get_value(),
-                'k_slider': self._widgets['k_slider'].get_value(),
-                'pca_slider': self._widgets['pca_slider'].get_value(),
-                'whiten_toggle': self._widgets['whiten_toggle'].get_value(),
-                'simgraph-picker': self._widgets['simgraph-picker'].get_value(),
-                'epsilon_sigma': self._widgets['epsilon_sigma'].get_value(),
-                'knn_k': self._widgets['knn_k'].get_value(),
-                'knn_mutual_toggle': self._widgets['knn_mutual_toggle'].get_value()}
+        return {'pca_dims': int(self.widgets['pca_slider'].get_value()),
+                'whiten_toggle': self.widgets['whiten_toggle'].get_value(),
+                'alg': self.widgets['alg'].get_value(),
+                'k_slider': int(self.widgets['k_slider'].get_value()),
+                'dist_metric_name': self.widgets['dist_metric_toggle'].get_value(),
+                'simg_graph_name': self.widgets['simgraph-picker'].get_value(),
+                'epsilon_sigma': self.widgets['epsilon_sigma'].get_value(),
+                'knn_k': int(self.widgets['knn_k'].get_value()),
+                'knn_mutual_toggle': self.widgets['knn_mutual_toggle'].get_value()}
 
     def _draw(self, image):
         # draw_bbox(image, self._bbox, 3, COLORS['DARK_NAVY_RGB'])
@@ -211,52 +238,74 @@ class ControlWindow(ClusterWindow):
         # for bbox in [self._k_slider_bbox, self._pca_slider_bbox, self._whiten_toggle_bbox,self._simgraph_param_split_bbox, self._simgraph_toggle_bbox]:
         #     draw_bbox(image, bbox, 1, COLORS['LIGHT_GRAY'])
 
-        for widget_name, widget in self._widgets.items():
+        for widget_name, widget in self.widgets.items():
             widget.render(image)
 
         return image
 
     def _alg_change(self, _):
-        alg_name = self._widgets['alg'].get_value()
-        if alg_name=='KMeans': 
-            self._widgets['simgraph-picker'].set_visible(False)
-            self._widgets['epsilon_sigma'].set_visible(False)
-            self._widgets['knn_k'].set_visible(False)
-            self._widgets['knn_mutual_toggle'].set_visible(False)
 
-        elif alg_name=='Spectral':
-            self._widgets['simgraph-picker'].set_visible(True)
-            simgraph = self._widgets['simgraph-picker'].get_value()
-            if simgraph == 'Epsilon' or simgraph == 'Full':
-                self._widgets['epsilon_sigma'].set_visible(True)
-                self._widgets['knn_k'].set_visible(False)
-                self._widgets['knn_mutual_toggle'].set_visible(False)
-            elif simgraph == 'KNN':
-                self._widgets['epsilon_sigma'].set_visible(False)
-                self._widgets['knn_k'].set_visible(True)
-                self._widgets['knn_mutual_toggle'].set_visible(True)
+        alg_name = self.widgets['alg'].get_value()
+
+        if alg_name == 'KMeans':
+            self.widgets['simgraph-picker'].set_visible(False)
+            self.widgets['epsilon_sigma'].set_visible(False)
+            self.widgets['knn_k'].set_visible(False)
+            self.widgets['knn_mutual_toggle'].set_visible(False)
+
+        elif alg_name == 'Spectral':
+            self.widgets['simgraph-picker'].set_visible(True)
+            simgraph_name = self.widgets['simgraph-picker'].get_value()
+            if  simgraph_name == 'Epsilon' or simgraph_name == 'Full':
+                self.widgets['epsilon_sigma'].set_visible(True)
+                self.widgets['knn_k'].set_visible(False)
+                self.widgets['knn_mutual_toggle'].set_visible(False)
+            elif simgraph_name == 'KNN':
+                self.widgets['epsilon_sigma'].set_visible(False)
+                self.widgets['knn_k'].set_visible(True)
+                self.widgets['knn_mutual_toggle'].set_visible(True)
             else:
-                raise ValueError("Unknown sim-graph name: %s" % simgraph)
+                raise ValueError("Unknown sim-graph name: %s" % simgraph_name)
         else:
             raise ValueError("Unknown algorithm name: %s" % alg_name)
         
-
+        self.widgets['run'].set_visible(True)
+        self._cur_alg = alg_name
+        self.app.refresh_alg()
+        
     def _param_change(self, value):
         print("CHANGING PARAMS:", value)
+        # enable run button
+        self.widgets['run'].set_visible(True)
+        self.app.update_params(self.get_params())
+
+    def _k_change(self, value):
+        print("CHANGING K:", value)
+        # enable run button
+        self.widgets['run'].set_visible(True)
+        self.app.update_k(value)
+
+    def _preproc_change(self, value):
+        print("CHANGING PREPROC PARAMS:", value)
+        # enable run button
+        self.widgets['run'].set_visible(True)
+        self.app.clear_preprocessing()
 
     def _run(self):
-        self.app.update_clusters(self.get_params())
+        self.app.recluster()
+        # disable run button
+        self.widgets['run'].set_visible(False)
 
     def on_mouse(self, event, x, y, flags, param):
-        for _, widget in self._widgets.items():
+        for _, widget in self.widgets.items():
             widget.on_mouse(event, x, y, flags, param)
 
 
 class CharsetWindow(ClusterWindow):
     _LAYOUT = {'indent_px': 28,
-               'x_div_rel': .2,
+               'x_div_rel': .15,
                'char_spacing_frac': 0.1,
-               'button_spacing_frac': 0.25,
+               'button_spacing_frac': 0.5,
                'bbox_color': COLORS['DARK_NAVY_RGB'],
                'text_color': COLORS['DARK_NAVY_RGB'],
                'unused_color': COLORS['SKY_BLUE'],
@@ -364,6 +413,7 @@ class CharsetWindow(ClusterWindow):
             self._char_buttons[char] = char_button
 
     def push_button(self, char):
+
         if char in self.char_states:
             self.char_states[char] = not self.char_states[char]
         elif char == 'All':
@@ -372,7 +422,10 @@ class CharsetWindow(ClusterWindow):
             self.char_states = {c: False for c in self.chars}
         elif char == 'Good':
             self.char_states = {c: (c in GOOD_CHAR_SET) for c in self.chars}
-        logging.info("CharsetWindow: toggled '%s', now %i chars on", char, len(self.app.char_set))
+        self.app.char_set = [c for c in self.chars if self.char_states[c]]
+        logging.info("CharsetWindow: toggled '%s', now %i chars:", char, len(self.app.char_set))
+        logging.info("\t%s", self.app.char_set)
+        self.app.windows['ctrl_window'].widgets['run'].set_visible(True)
 
     def _draw(self, image):
 
@@ -448,10 +501,123 @@ class CharsetWindow(ClusterWindow):
             self._mouse_down = False
 
 
+class ResultsWindow(ClusterWindow):
+    """
+    Show the clusters sorted by size, w/in each cluster sorted by distance from cluster mean.
+    """
+    _LAYOUT = {'indent_px': 10,
+               'max_samples_per_cluster': 15*15,
+               'thickness': 2
+               }
+
+    def __init__(self, app, bbox_rel=None):
+        super().__init__(app, bbox_rel)
+        self._assignments = None
+        self._distances = None
+        self._train_vec_info = None
+        self._img = None
+        self._bbox= None
+        self._fg_color = np.array(COLORS['DARK_NAVY_RGB']).reshape((1, 1, 3))
+        self._bkg_color = np.array(COLORS['OFF_WHITE_RGB']).reshape((1, 1, 3))
+        self._clusters = []  # each is dict for each cluster:  bbox, is_selected, image
+
+    def update_results(self, assignments, distances, train_vec_info):
+        self._assignments = assignments
+        self._distances = distances
+        self._train_vec_info = train_vec_info
+        if self._bbox is not None:
+            self.redraw()
+
+    def redraw(self):
+
+        tiles = self.get_disp_tiles()
+        w,h = self._bbox['x'][1]-self._bbox['x'][0], self._bbox['y'][1]-self._bbox['y'][0]
+        
+        image,bboxes = make_assign_gallery(size=(w,h),
+                                    tiles=np.array(tiles),
+                                    distances = self._distances,
+                                    assignments=self._assignments,
+                                    bgk_color=self._bkg_color)
+
+        if image.shape[0]!=h or image.shape[1]!=w:
+            bboxes = [scale_bbox(bbox, (w/image.shape[1], h/image.shape[0])) for bbox in bboxes]
+            image = cv2.resize(image, (w,h), interpolation=cv2.INTER_AREA)
+        self._bboxes = bboxes
+        self._img = image
+        
+
+    def get_disp_tiles(self):
+        """
+        Make a tile for every font in the training set, showing the specified character.
+        """
+        tiles = []
+        char_ind = 0
+
+        for ind in range(len(self._train_vec_info['font_data'])):
+            font_vec = self._train_vec_info['font_data'][ind]
+            tile = font_vec[784*char_ind:784*(char_ind+1)].reshape((28,28,1)) 
+            tile_image = self._fg_color * tile + self._bkg_color * (1-tile)
+            tiles.append(tile_image.astype(np.uint8))
+        return tiles
+
+    def resize(self, size):
+        left, right = int(self._bbox_rel['x'][0] * size[0]), int(self._bbox_rel['x'][1] * size[0])
+        top, bottom = int(self._bbox_rel['y'][0] * size[1]), int(self._bbox_rel['y'][1] * size[1])
+        width, height = right - left, bottom - top
+        self._bbox = {'x': (left, right),
+                      'y': (top, bottom)}
+        self._aspect = width / height if height > 0 else 0
+        if self._assignments is not None:
+            self.redraw()
+
+
+    def on_mouse(self, event, x, y, flags, param):
+        pass
+
+    
+
+    def _draw(self, image):
+        if self._assignments is None:
+            draw_bbox(image, self._bbox, 3, COLORS['DARK_NAVY_RGB'])
+        else:
+            if self._img is not None:
+                image[self._bbox['y'][0]:self._bbox['y'][1], self._bbox['x'][0]:self._bbox['x'][1]] = self._img
+            #draw_bbox(image, self._bbox, 3, COLORS['DARK_NAVY_RGB'])
+        return image
+    
+class StatusWindow(ClusterWindow):
+    """
+    Print stats from the clustering algorithm.
+    """
+    def __init__(self, app, bbox_rel=None):
+        super().__init__(app, bbox_rel)
+        self._frame_out = None
+        self._bkg_color = COLORS['OFF_WHITE_RGB']
+        self._draw_color = COLORS['DARK_NAVY_RGB']
+
+    def resize(self, size):
+        left, right = int(self._bbox_rel['x'][0] * size[0]), int(self._bbox_rel['x'][1] * size[0])
+        top, bottom = int(self._bbox_rel['y'][0] * size[1]), int(self._bbox_rel['y'][1] * size[1])
+        width, height = right - left, bottom - top
+        self._bbox = {'x': (left, right),
+                      'y': (top, bottom)}
+        self._aspect = width / height if height > 0 else 0
+        self._frame_out = np.zeros((height, width, 3), dtype=np.uint8)
+        self._frame_out[:] = self._bkg_color
+    
+    def on_mouse(self, event, x, y, flags, param):
+        pass
+
+    def _draw(self, image):
+        self.app.stats_artist.draw_stats(image, self._bbox, color=self._draw_color)
+        return image
+
+
+
 class FontClusterApp(object):
     """
     +-----------+---------------------------+
-    |  Controls |     Cluster view          |
+    |  Controls |     Cluster Results       |
     |           |                           |
     |           |                           |
     |           |                           |
@@ -466,30 +632,187 @@ class FontClusterApp(object):
     """
 
     def __init__(self, size=(1600, 950)):
+        
         self.data = AlphaNumericMNISTData(use_good_subset=False, test_train_split=0.0)
         self.disp_font_ind = 0
         self.char_set = GOOD_CHAR_SET
         self.size = size
+        self._last_pca_dims = -1
         # self._pca = PCA()
         # self._clusters = None
-
-        self.windows = {'cs_window': CharsetWindow(self, bbox_rel={'x': (.1, .9), 'y': (.74, 1.0)}),
-                        'ctrl_window': ControlWindow(self, bbox_rel={'x': (.025, .15), 'y': (.02, .56)})}
+        self.clust_alg = None
+        self.sim_graph=None
+        self.windows = {'cs_window': CharsetWindow(self, bbox_rel={'x': (.1, .9), 'y': (.8, 1.0)}),
+                        'ctrl_window': ControlWindow(self, bbox_rel={'x': (.01, .14), 'y': (.02, .56)}),
+                        'results_window': ResultsWindow(self, bbox_rel={'x': (.15, 1.0), 'y': (.02, .8)}),
+                        'status_window': StatusWindow(self, bbox_rel={'x': (.01, .14), 'y': (.57, .79)})}
 
         self.win_name = "Character Set"
         cv2.namedWindow(self.win_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(self.win_name, self.size[0], self.size[1])
         cv2.setMouseCallback(self.win_name, self.on_mouse)
+        self.x_train = None
 
-    def update_clusters(self, clustering_params):
-        logging.info("Clustering with params:\n%s", pprint.pformat(clustering_params))
+    def update_k(self, k):
+        if self.clust_alg is not None:
+            self.clust_alg.set_k(k)
+
+    def clear_preprocessing(self):
+        self.x_train = None
+        self._last_pca_dims = -1
+
+    def update_preprocessing(self, params):
+        logging.info("Preprocessing with params:\n%s", pprint.pformat(params))
+        self.x_train, self.fonts_train,self.train_vec_info = self._preprocess(params)
+        self.refresh_alg()
+
+    def recluster(self):
+        params = self.windows['ctrl_window'].get_params()
+        logging.info("Clustering with params:\n%s", pprint.pformat(params))
         # TODO:  implement clustering
+        if self.x_train is None:
+            self.update_preprocessing(params)
+        self._assignments,self._distances = self._cluster(self.x_train)
+        self.windows['results_window'].update_results( self._assignments, self._distances,self.train_vec_info)
+
+    def update_params(self, params):
+        params = self.windows['ctrl_window'].get_params()
+        alg = params['alg']
+        if alg=='KMeans':
+            if params['k_slider'] != self.clust_alg.k or params['dist_metric_name'] != self.clust_alg.which:
+                self.refresh_alg()
+        elif alg=='Spectral':
+            sim_graph_name = params['simg_graph_name']
+            if not isinstance(self._sim_graph, SIM_GRAPHS[sim_graph_name]['type']):
+                raise Exception("This shouldn't be called for alg changes.")
+            else:
+                self._sim_graph.set_param(**self._get_sim_graph_params(params))
+
+    def _get_sim_graph_params(self, params):
+        sim_graph_name = params['simg_graph_name']
+        eps_sig = params['epsilon_sigma']
+        knn_k = params['knn_k']
+        knn_mutual = params['knn_mutual_toggle']
+        sim_graph_param_name = SIM_GRAPHS[sim_graph_name]['param']
+        distance_metric = params['dist_metric_name']
+        dist_metric = [k for k in DISTANCE_LABELS.keys() if DISTANCE_LABELS[k]==distance_metric][0]
+        if sim_graph_name == 'Epsilon':
+            sim_graph_params = {'epsilon_rel': eps_sig, 'distance_metric': dist_metric}
+        elif sim_graph_name == 'Full':
+            sim_graph_params = {'sigma_rel': eps_sig, 'distance_metric': dist_metric}
+        elif sim_graph_name == 'KNN':
+            sim_graph_params = {'k': knn_k, 'mutual': knn_mutual}
+        else:
+            raise ValueError("Unknown sim-graph name: %s" % sim_graph_name)
+        return sim_graph_params
+        
+    def refresh_alg(self):
+        params = self.windows['ctrl_window'].get_params()
+        alg = params['alg']
+        k = params['k_slider']      
+        dist_metric_name = params['dist_metric_name']
+        #reverse-lookup to get the metric:
+        try:
+            dist_metric = [k for k in DISTANCE_LABELS.keys() if DISTANCE_LABELS[k]==dist_metric_name][0]
+        except:
+            raise ValueError("Unknown distance metric name: %s" % dist_metric_name)
+
+        if alg == 'KMeans':
+            self.clust_alg = KMeansAlgorithm(k=k, distance_metric=dist_metric,n_init=1, max_iter=1000)
+            self._sim_graph = None
+            self.stats_artist = self.clust_alg
+
+        elif alg == 'Spectral':
+            sim_graph_name = params['simg_graph_name']
+            sim_graph_params = self._get_sim_graph_params(params)
+
+            self._sim_graph = SIM_GRAPHS[sim_graph_name]['type'](**sim_graph_params)
+            self.clust_alg = SpectralAlgorithm(n_clusters=k)
+            self.stats_artist = self._sim_graph
+        else:
+            raise ValueError("Unknown algorithm name: %s" % alg)
+
+    def _cluster(self, x_train):
+        if self._sim_graph is not None:
+            self._sim_graph.fit(x_train)  # already update in update_params
+            data = self._sim_graph 
+        else:
+            data = x_train
+        self.clust_alg.fit(data,verbose=True)
+        assignments, distances = self.clust_alg.assign(self.x_train)
+
+        return assignments, distances
+    
+    def _make_img(self, train_vecs):
+        width = 28 * len(self.char_set)
+        height = 28 * len(train_vecs['font_names'])
+        img = np.zeros((height, width), dtype=np.uint8)
+        img[:] = 255
+        for f_ind, font in enumerate(train_vecs['font_names']):
+            for c_ind, char in enumerate(self.char_set):
+                img[f_ind * 28:(f_ind + 1) * 28, c_ind * 28:(c_ind + 1) * 28] = (train_vecs['font_data'][f_ind][c_ind].reshape((28, 28)) * 255).astype(np.uint8)
+        return img
+
+    def _preprocess(self, params):
+        """
+        Step 1, subset characters, 
+        step 2  convert to "font vectors":
+           For each font with all selected chars represented, concatenate the character images into a single vector.
+        Step 3  apply PCA (if pca_dims > 0).
+        """
+        # step 1,2, make vectors
+        train_vecs = {'font_names': [],
+                      'font_data': [],}
+        fonts = np.sort(np.unique(self.data.font_names_train))
+        logging.info("Data has %i fonts.", len(fonts))
+        chars = np.sort(self.char_set)
+        char_mask = np.isin(self.data.labels_train, chars)
+        n_chars = len(chars)
+
+        for font in fonts:
+            font_mask = (self.data.font_names_train == font) & char_mask
+            font_labels = self.data.labels_train[font_mask]
+            if n_chars == font_labels.size:
+                order = np.argsort(font_labels)
+                font_data = self.data.x_train[font_mask][order]
+                train_vecs['font_names'].append(font)
+                train_vecs['font_data'].append(font_data.flatten())
+        # test_img =self._make_img(train_vecs)
+        # cv2.imwrite("test_vecs.png", test_img)
+
+        logging.info("After subsetting, %i fonts have all %i chars.", len(train_vecs['font_names']), len(self.char_set))
+        
+        x_train = np.array([fdata.flatten() for fdata in train_vecs['font_data']])
+        fonts_train = np.array(train_vecs['font_names'])
+
+
+        logging.info("\tX-train shape: %s", x_train.shape)
+        logging.info("\tFonts shape: %s", fonts_train.shape)
+
+        # step 3, PCA
+        pca_dims = params['pca_dims']
+        if pca_dims >= 0 and pca_dims != self._last_pca_dims:
+            logging.info("Applying PCA, dims=%i", pca_dims)
+            pca = PCA(dims=params['pca_dims'])
+            x_train = pca.fit_transform(x_train)
+        elif pca_dims == self._last_pca_dims:
+            logging.info("Using cached PCA, dims=%i", pca_dims)
+            x_train = self.x_train
+            fonts_train = self.fonts_train
+        else:
+            raise ValueError("pca_dims must be >= 0, <= 784")
+            
+        self._last_pca_dims = pca_dims
+        return x_train, fonts_train, train_vecs
 
     def run(self):
 
         while True:
-
-            x, y, current_width, current_height = cv2.getWindowImageRect(self.win_name)
+            try:
+                x, y, current_width, current_height = cv2.getWindowImageRect(self.win_name)
+            except cv2.error:
+                logging.info("Window closed, exiting...")
+                break
             if (current_width, current_height) != self.size:
                 self.size = (current_width, current_height)
                 for _, window in self.windows.items():
@@ -504,6 +827,10 @@ class FontClusterApp(object):
                 break
         logging.info("Exiting...")
 
+    def save_clusters(self):
+        logging.info("Saving clusters...")
+        # TODO: Implement saving logic
+
     def make_blank(self):
         blank = np.zeros((self.size[1], self.size[0], 3), dtype=np.uint8)
         blank[:] = COLORS['OFF_WHITE_RGB']
@@ -514,12 +841,10 @@ class FontClusterApp(object):
             window.on_mouse(event, x, y, flags, param)
 
 
-def test_windows():
-
+def run_app():
     app = FontClusterApp().run()
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-
-    test_windows()
+    run_app()

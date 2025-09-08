@@ -325,6 +325,22 @@ def test_fit_spaced_intervals():
     plt.show()
 
 
+def write_lines(img, bbox, lines, pad_px, font=cv2.FONT_HERSHEY_SIMPLEX, color=(128, 128, 128)):
+    """
+    """
+    y_span = bbox['y'][0] + pad_px, bbox['y'][1]-pad_px
+    x_span = bbox['x'][0] + pad_px, bbox['x'][1]-pad_px
+    txt_w, txt_h = x_span[1]-x_span[0], y_span[1]-y_span[0]
+
+    n_lines = len(lines)
+    line_y = fit_spaced_intervals(y_span, n_lines, spacing_fraction=0, fill_extent=False)
+    line_wh = (txt_w, line_y[0][1]-line_y[0][0])
+
+    font_size, font_thick = get_best_font_size(lines, line_wh, font=font)
+    for i, line in enumerate(lines):
+        org = (x_span[0], int(line_y[i][0] + (line_y[i][1]-line_y[i][0]+font_size)//2))
+        cv2.putText(img, line, org, font, font_size, color, font_thick, cv2.LINE_AA)
+
 def draw_bbox(image, bbox, thickness=1, inside=True, color=(128, 128, 128)):
     """
     Set pixels just inside/outside the specified bounding box to the color indicated.
