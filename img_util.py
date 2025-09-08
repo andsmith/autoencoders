@@ -49,7 +49,7 @@ def make_digit_mosaic(imgs, mosaic_aspect=1.7, bkg=None):
         if n_channels else np.zeros((n_rows*img_side, n_cols*img_side), dtype=np.uint8)
     if bkg is not None:
         img[:, :, ...] = bkg
-    print(f"Creating mosaic with {n_rows} rows and {n_cols} columns, img shape {img.shape}")
+    #print(f"Creating mosaic with {n_rows} rows and {n_cols} columns, img shape {img.shape}")
 
     for i, im in enumerate(imgs):
         x = i % n_cols
@@ -143,7 +143,7 @@ def make_heterog_mosaic_autosize(imgs, mosaic_aspect=1.7, pad_px=6, bkg_color=0)
             done = True
         except ValueError:
             init_size = (int(init_size[0]*inc_rate), int(init_size[1]*inc_rate))
-            print(f"Increasing mosaic size to {init_size}.")
+            #self.print(f"Increasing mosaic size to {init_size}.")
     
     return img, bboxes
 

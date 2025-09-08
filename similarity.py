@@ -153,7 +153,7 @@ class EpsilonSimGraph(SimilarityGraph):
             self._epsilon, self._epsilon_rel, dmin, dmax))
         sim_matrix = np.zeros(self._dists.shape)
         sim_matrix[self._dists <= self._epsilon] = 1
-        # remove self-loops
+        # remove self-loop
         np.fill_diagonal(sim_matrix, np.Inf)
         return sim_matrix
 
@@ -325,7 +325,7 @@ def test_full_param_update():
 
 
 class NNSimGraph(SimilarityGraph):
-    def __init__(self, k=5, mutual=False):
+    def __init__(self, k=5, mutual=False, distance_metric=None):
         """
         Construct a similarity graph using K-nearest neighbors.
         :param points: 2D numpy array of points
@@ -335,7 +335,7 @@ class NNSimGraph(SimilarityGraph):
         """
         self._k = k
         self._mutual = mutual
-        super().__init__(distance_metric=None)
+        super().__init__(distance_metric=distance_metric)
 
     def set_param(self, k, mutual, distance_metric=None):
         self._k = k

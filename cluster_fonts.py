@@ -23,9 +23,7 @@ Clustering algorithms and parameters:
                 - Distance metric:  cosine, euclidean\
             - spectral, params:
                 - Similarity graph type:
-                    - Epsilon (binary, within max distance threshold)
                     - KNN (k-nearest neighbors), shared-only / inclusive
-                    - Full, using gaussian distance function with parameter sigma.
                 - Affinity:  nearest_neighbors, precomputed
                 - Number of clusters:  K
 
@@ -49,17 +47,18 @@ from clustering import KMeansAlgorithm, SpectralAlgorithm
 from similarity import EpsilonSimGraph, FullSimGraph, NNSimGraph
 from img_util import make_assign_gallery
 
-SIM_GRAPHS = {'Epsilon': {'type':EpsilonSimGraph,
-                          'param': 'epsilon_rel'},
-              'KNN': {'type':NNSimGraph,
-                      'param': 'k'},
-              'Full': {'type':FullSimGraph,
-                       'param': 'sigma_rel'}}
+SIM_GRAPHS = {'KNN': {'type':NNSimGraph,
+                       'param': 'k'}}
+            #   'Epsilon': {'type':EpsilonSimGraph,
+            #              'param': 'epsilon_rel'},
+            #   'Full': {'type':FullSimGraph,
+            #            'param': 'sigma_rel'}}
 
 ALGS = {'KMeans': KMeansAlgorithm,
         'Spectral': SpectralAlgorithm}
+
 DISTANCE_LABELS = {'euclidean':"EUC-D", 
-                   F'cosine':'COS-D'}
+                   'cosine':'COS-D'}
 
 class ClusterWindow(ABC):
     def __init__(self, app, bbox_rel=None):
@@ -124,10 +123,6 @@ class ControlWindow(ClusterWindow):
             |  +---------K----+  |  <- slider
             |  +--pca-----+ [W]  |  <- slider, whitened/unwhitened toggle button
             |                    |
-            | Sim-graph type:    |
-            |   - Epsilon        |
-            |   * KNN            |
-            |   - Full           |
             |                    |
             | Sim-graph params:  |
             |  +--k-------+ [M]  |  <- updates for selected sim-graph type.
@@ -136,8 +131,8 @@ class ControlWindow(ClusterWindow):
             +--------------------+
     """
     _LAYOUT = {'indent_px': 0,
-               'area_names': ['alg', 'param', 'sim-graph', 'sim-param', 'action'],
-               'area_weights': [2, 3, 3.5, 1.5, 1.],  # 5 vertical areas of the control window
+               'area_names': ['alg', 'param', 'sim-param', 'action'],
+               'area_weights': [2.5, 3.5, 1.5,  1.5],  # 5 vertical areas of the control window
                'pad_weight': .25}
 
     _ALGORITHMS = [k for k in ALGS.keys()]
@@ -145,7 +140,6 @@ class ControlWindow(ClusterWindow):
 
     _PARAM_RANGES = {'K': (2, 42),
                      'knn_k': (1, 30),
-                     'epsilon_sigma': (0., 1.),
                      'PCA': (0, 256)}
 
     def __init__(self, app, bbox_rel=None):
@@ -161,9 +155,6 @@ class ControlWindow(ClusterWindow):
             'k_slider': Slider(self._k_slider_bbox, label='N. Clusters', callback=self._k_change, default=2, range=self._PARAM_RANGES['K'], format_str=int_fmt_str),
             'pca_slider': Slider(self._pca_slider_bbox, label='PCA Dims', callback=self._preproc_change, default=100, range=self._PARAM_RANGES['PCA'], format_str=int_fmt_str),
             'whiten_toggle': ToggleButton(self._whiten_toggle_bbox, label='Norm', callback=self._preproc_change),
-            'simgraph-picker': RadioButtons(self._area_bboxes['sim-graph'], title='Similarity Graph', callback=self._alg_change,
-                                            options=self._SIMGRAPHS),
-            'epsilon_sigma': Slider(self._simgraph_param_full_bbox, label='Epsilon/Sigma', callback=self._param_change, default=0.05, range=self._PARAM_RANGES['epsilon_sigma']),
             'knn_k': Slider(self._simgraph_param_split_bbox, label='KNN K', callback=self._param_change, default=5, range=self._PARAM_RANGES['knn_k'], format_str=int_fmt_str),
             'knn_mutual_toggle': ToggleButton(self._simgraph_toggle_bbox, label='Mutual', callback=self._param_change),
             'dist_metric_toggle': ToggleButton(self._dist_metric_toggle_bbox, 
@@ -213,8 +204,6 @@ class ControlWindow(ClusterWindow):
             self.widgets['pca_slider'].move_to(self._pca_slider_bbox)
             self.widgets['whiten_toggle'].move_to(self._whiten_toggle_bbox)
             self.widgets['dist_metric_toggle'].move_to(self._dist_metric_toggle_bbox)
-            self.widgets['simgraph-picker'].move_to(self._area_bboxes['sim-graph'])
-            self.widgets['epsilon_sigma'].move_to(self._simgraph_param_full_bbox)
             self.widgets['knn_k'].move_to(self._simgraph_param_split_bbox)
             self.widgets['knn_mutual_toggle'].move_to(self._simgraph_toggle_bbox)
             self.widgets['run'].move_to(self._run_bbox)
@@ -226,8 +215,6 @@ class ControlWindow(ClusterWindow):
                 'alg': self.widgets['alg'].get_value(),
                 'k_slider': int(self.widgets['k_slider'].get_value()),
                 'dist_metric_name': self.widgets['dist_metric_toggle'].get_value(),
-                'simg_graph_name': self.widgets['simgraph-picker'].get_value(),
-                'epsilon_sigma': self.widgets['epsilon_sigma'].get_value(),
                 'knn_k': int(self.widgets['knn_k'].get_value()),
                 'knn_mutual_toggle': self.widgets['knn_mutual_toggle'].get_value()}
 
@@ -248,24 +235,12 @@ class ControlWindow(ClusterWindow):
         alg_name = self.widgets['alg'].get_value()
 
         if alg_name == 'KMeans':
-            self.widgets['simgraph-picker'].set_visible(False)
-            self.widgets['epsilon_sigma'].set_visible(False)
             self.widgets['knn_k'].set_visible(False)
             self.widgets['knn_mutual_toggle'].set_visible(False)
 
         elif alg_name == 'Spectral':
-            self.widgets['simgraph-picker'].set_visible(True)
-            simgraph_name = self.widgets['simgraph-picker'].get_value()
-            if  simgraph_name == 'Epsilon' or simgraph_name == 'Full':
-                self.widgets['epsilon_sigma'].set_visible(True)
-                self.widgets['knn_k'].set_visible(False)
-                self.widgets['knn_mutual_toggle'].set_visible(False)
-            elif simgraph_name == 'KNN':
-                self.widgets['epsilon_sigma'].set_visible(False)
-                self.widgets['knn_k'].set_visible(True)
-                self.widgets['knn_mutual_toggle'].set_visible(True)
-            else:
-                raise ValueError("Unknown sim-graph name: %s" % simgraph_name)
+            self.widgets['knn_k'].set_visible(True)
+            self.widgets['knn_mutual_toggle'].set_visible(True)
         else:
             raise ValueError("Unknown algorithm name: %s" % alg_name)
         
@@ -522,6 +497,7 @@ class ResultsWindow(ClusterWindow):
         self._clusters = []  # each is dict for each cluster:  bbox, is_selected, image
 
     def update_results(self, assignments, distances, train_vec_info):
+
         self._assignments = assignments
         self._distances = distances
         self._train_vec_info = train_vec_info
@@ -643,9 +619,9 @@ class FontClusterApp(object):
         self.clust_alg = None
         self.sim_graph=None
         self.windows = {'cs_window': CharsetWindow(self, bbox_rel={'x': (.1, .9), 'y': (.8, 1.0)}),
-                        'ctrl_window': ControlWindow(self, bbox_rel={'x': (.01, .14), 'y': (.02, .56)}),
+                        'ctrl_window': ControlWindow(self, bbox_rel={'x': (.01, .14), 'y': (.02, .4)}),
                         'results_window': ResultsWindow(self, bbox_rel={'x': (.15, 1.0), 'y': (.02, .8)}),
-                        'status_window': StatusWindow(self, bbox_rel={'x': (.01, .14), 'y': (.57, .79)})}
+                        'status_window': StatusWindow(self, bbox_rel={'x': (.01, .14), 'y': (.41, .79)})}
 
         self.win_name = "Character Set"
         cv2.namedWindow(self.win_name, cv2.WINDOW_NORMAL)
@@ -673,6 +649,7 @@ class FontClusterApp(object):
         if self.x_train is None:
             self.update_preprocessing(params)
         self._assignments,self._distances = self._cluster(self.x_train)
+        print(len(np.unique(self._assignments)), "clusters found.")
         self.windows['results_window'].update_results( self._assignments, self._distances,self.train_vec_info)
 
     def update_params(self, params):
@@ -682,28 +659,21 @@ class FontClusterApp(object):
             if params['k_slider'] != self.clust_alg.k or params['dist_metric_name'] != self.clust_alg.which:
                 self.refresh_alg()
         elif alg=='Spectral':
-            sim_graph_name = params['simg_graph_name']
+            sim_graph_name = 'KNN'
             if not isinstance(self._sim_graph, SIM_GRAPHS[sim_graph_name]['type']):
                 raise Exception("This shouldn't be called for alg changes.")
             else:
                 self._sim_graph.set_param(**self._get_sim_graph_params(params))
 
+            self.clust_alg.set_k(params['k_slider'])
+
     def _get_sim_graph_params(self, params):
-        sim_graph_name = params['simg_graph_name']
-        eps_sig = params['epsilon_sigma']
+        sim_graph_name = 'KNN'
         knn_k = params['knn_k']
         knn_mutual = params['knn_mutual_toggle']
-        sim_graph_param_name = SIM_GRAPHS[sim_graph_name]['param']
         distance_metric = params['dist_metric_name']
         dist_metric = [k for k in DISTANCE_LABELS.keys() if DISTANCE_LABELS[k]==distance_metric][0]
-        if sim_graph_name == 'Epsilon':
-            sim_graph_params = {'epsilon_rel': eps_sig, 'distance_metric': dist_metric}
-        elif sim_graph_name == 'Full':
-            sim_graph_params = {'sigma_rel': eps_sig, 'distance_metric': dist_metric}
-        elif sim_graph_name == 'KNN':
-            sim_graph_params = {'k': knn_k, 'mutual': knn_mutual}
-        else:
-            raise ValueError("Unknown sim-graph name: %s" % sim_graph_name)
+        sim_graph_params = {'k': knn_k, 'mutual': knn_mutual, 'distance_metric': dist_metric}
         return sim_graph_params
         
     def refresh_alg(self):
@@ -723,7 +693,7 @@ class FontClusterApp(object):
             self.stats_artist = self.clust_alg
 
         elif alg == 'Spectral':
-            sim_graph_name = params['simg_graph_name']
+            sim_graph_name = 'KNN'
             sim_graph_params = self._get_sim_graph_params(params)
 
             self._sim_graph = SIM_GRAPHS[sim_graph_name]['type'](**sim_graph_params)
