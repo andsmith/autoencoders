@@ -1,6 +1,6 @@
 
 import numpy as np
-
+from util import draw_bbox
 
 def diff_img(digit_true, digit_hat, thresh=0.1):
     """
@@ -49,7 +49,7 @@ def make_digit_mosaic(imgs, mosaic_aspect=1.7, bkg=None):
         if n_channels else np.zeros((n_rows*img_side, n_cols*img_side), dtype=np.uint8)
     if bkg is not None:
         img[:, :, ...] = bkg
-    #print(f"Creating mosaic with {n_rows} rows and {n_cols} columns, img shape {img.shape}")
+    # print(f"Creating mosaic with {n_rows} rows and {n_cols} columns, img shape {img.shape}")
 
     for i, im in enumerate(imgs):
         x = i % n_cols
@@ -84,6 +84,7 @@ def make_heterog_mosaic(size, imgs, pad_px=6, bkg_color=0):
     :param mosaic_aspect: desired aspect ratio of the mosaic (width/height)
     :returns img: combined image
              bboxes: list of bounding boxes for each image in the mosaic
+             labels:  labels[j] = i means bboxes[i] contains image imgs[j]
     """
     n_imgs = len(imgs)
     if n_imgs == 0:
@@ -107,6 +108,7 @@ def make_heterog_mosaic(size, imgs, pad_px=6, bkg_color=0):
     row_height = 0
     placed = [False] * n_imgs
     bboxes = []
+    labels = []
     while not all(placed):
         placed_in_row = False
         for i in range(n_imgs):
@@ -118,8 +120,9 @@ def make_heterog_mosaic(size, imgs, pad_px=6, bkg_color=0):
                 im = imgs[i]
                 img[y:y+img_wh[1], x:x+img_wh[0], ...] = im[:, :, ...]
                 placed[i] = True
-                x += img_wh[0] + pad_px
                 bboxes.append({'x': (x, x + img_wh[0]), 'y': (y, y + img_wh[1])})
+                labels.append(i)
+                x += img_wh[0] + pad_px
                 row_height = max(row_height, img_wh[1])
                 placed_in_row = True
         if not placed_in_row:
@@ -129,23 +132,23 @@ def make_heterog_mosaic(size, imgs, pad_px=6, bkg_color=0):
             row_height = 0
             if y >= mosaic_height - pad_px:
                 raise ValueError("Not enough room to place all images in the mosaic. Try increasing the mosaic size.")
-    return img, bboxes
+    return img, bboxes, labels
 
 
-def make_heterog_mosaic_autosize(imgs, mosaic_aspect=1.7, pad_px=6, bkg_color=0):
+def make_heterog_mosaic_autosize(imgs, mosaic_aspect=1.7, pad_px=6, bkg_color=0,init_size=None):
     min_side = min(max(im.shape[0], im.shape[1]) for im in imgs)
-    init_size = (int(min_side*mosaic_aspect+pad_px*2), int(min_side+pad_px*2))
+    init_size = (int(min_side*mosaic_aspect+pad_px*2), int(min_side+pad_px*2)) if init_size is None else init_size
     done = False
     inc_rate = 1.1
     while not done:
         try:
-            img, bboxes = make_heterog_mosaic(init_size, imgs, pad_px=pad_px)
+            img, bboxes, labels = make_heterog_mosaic(init_size, imgs, pad_px=pad_px)
             done = True
         except ValueError:
             init_size = (int(init_size[0]*inc_rate), int(init_size[1]*inc_rate))
-            #self.print(f"Increasing mosaic size to {init_size}.")
-    
-    return img, bboxes
+            # self.print(f"Increasing mosaic size to {init_size}.")
+
+    return img, bboxes, labels
 
 
 def test_make_heterog_mosaic():
@@ -160,9 +163,12 @@ def test_make_heterog_mosaic():
         tile[:20, :20, ] = 0
         cv2.putText(tile, str(i), (1, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         tiles.append(tile)
-    size = np.array((800, 600))
+    size = None
     done = False
-    img, bboxes = make_heterog_mosaic_autosize(tiles, mosaic_aspect=1.7)
+    img, bboxes, labels = make_heterog_mosaic_autosize(tiles, mosaic_aspect=1.7, init_size=size)
+    for box in bboxes:
+        draw_bbox(img, box, color=255, thickness=2)
+
     plt.imshow(img)
     plt.show()
 
@@ -211,16 +217,18 @@ def make_assign_gallery(size, tiles, distances, assignments, n_max=200, pad_px=1
               for k in cluster_ids]
     aspect = size[0]/size[1]
 
-    img, cluster_bboxes = make_heterog_mosaic_autosize(images, pad_px=pad_px, mosaic_aspect=aspect, bkg_color=bgk_color)
+    img, cluster_bboxes, labels = make_heterog_mosaic_autosize(
+        images, pad_px=pad_px, mosaic_aspect=aspect, bkg_color=bgk_color, init_size=size)
 
-    return img, cluster_bboxes
+    return img, cluster_bboxes, labels
 
 
 def test_make_cluster_image():
     import matplotlib.pyplot as plt
     n_tiles = 2500
-    tiles = np.random.rand(n_tiles, 28*28)
+    tiles = (np.random.rand(n_tiles, 28*28)*255).astype(np.uint8)
     distances = np.random.rand(n_tiles)
+
     img1 = make_cluster_image(tiles, distances, n_max=100, aspect=1.7)
     img2 = make_cluster_image(tiles[:30], distances[:30], n_max=100, aspect=1.7)
     fig, ax = plt.subplots(1, 2)
@@ -229,19 +237,57 @@ def test_make_cluster_image():
     plt.show()
 
 
-def test_make_assign_gallery():
+def test_make_assign_gallery(plot=True):
     import matplotlib.pyplot as plt
-    n_tiles = 2500
-    tiles = np.random.rand(n_tiles, 28*28)
+    import cv2
+    n_tiles = 100
+    tiles = (np.random.rand(n_tiles, 28*28)*255).astype(np.uint8)
+
     distances = np.random.rand(n_tiles)
     assignments = np.random.randint(0, 10, size=(n_tiles,))
-    img, bboxes = make_assign_gallery((800, 600), tiles, distances, assignments,
-                                      n_max=200, pad_px=10)
+    img, bboxes, labels = make_assign_gallery((800, 600), tiles, distances, assignments,
+                                              n_max=20, pad_px=10)
     plt.imshow(img)
     plt.show()
+    return img, bboxes, labels
+
+
+def test_assign_gallery_bboxes():
+    """
+    interactively draw a box around the cluster the mouse is over.
+    Use the bounding boxes
+    """
+    import cv2
+    from util import draw_bbox
+    img, boxes, labels = test_make_assign_gallery(plot=False)
+    selected = [None]
+
+    def mouse_event(event, x, y, flags, param):
+        for i, b in enumerate(boxes):
+            selected[0] = None
+            if b['x'][0] <= x <= b['x'][1] and b['y'][0] <= y <= b['y'][1]:
+                print(f"Mouse over cluster {i}, label {labels[i]}, bbox {b}")
+                selected[0] = i
+                break
+
+    cv2.namedWindow("Gallery", cv2.WINDOW_NORMAL)
+    cv2.setMouseCallback("Gallery", mouse_event)
+    cv2.resizeWindow("Gallery", img.shape[1], img.shape[0])
+
+    while True:
+        frame = img.copy() 
+        if selected[0] is not None:
+            b = boxes[selected[0]]
+            draw_bbox(frame, b, color=255, thickness=2)
+        cv2.imshow("Gallery", frame)
+        key = cv2.waitKey(1)
+        if key == 27:  # ESC key
+            break
+    cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
     # test_make_cluster_image()
     # test_make_heterog_mosaic()
-    test_make_assign_gallery()
+    # test_make_assign_gallery()
+    test_assign_gallery_bboxes()

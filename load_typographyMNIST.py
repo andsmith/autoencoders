@@ -84,12 +84,15 @@ def _load_and_filter_zipped_csv(filepath: str, label_filters: set = None):
                     except:
                         print("Error in row %i: '%s'" % (row_num, row))
 
-    return np.array(data_rows, dtype=np.uint8), labels, names
+    return np.array(data_rows, dtype=np.uint8), np.array(labels), np.array(names)
 
 
 def _load(dataset,  test_frac=0.15):
     dataset_file = FILES[dataset]
     cache_file = CACHE_FILES[dataset]
+
+    cache_file = "(test=%.2f)-%s" % (test_frac, cache_file)
+
     if os.path.exists(cache_file):
         logging.info("Loading cached data from %s", cache_file)
         with np.load(cache_file) as data:
@@ -116,7 +119,7 @@ def _split_data(data, labels, names, test_mask):
 
 def load_numeric(subset=None, test_train_split=0.15, w_names=False):
     data, labels, names, test_mask = _load('numeric', test_frac=test_train_split)
-    data = (data/255.0).astype(np.float64)
+    data = (data/255.0).astype(np.float32)
     labels = np.array([int(l) for l in labels]).astype(int)
     names = np.array(names)
     if subset is not None:
@@ -141,7 +144,8 @@ def load_alphanumeric(subset=None, test_train_split=0.15, w_names=False, numeric
        (x_train, y_train, font_name_train), (x_test, y_test, font_name_test)
     """
     data, labels, names, test_mask = _load('alphanumeric', test_frac=test_train_split)
-    data = (data/255.0).astype(np.float64)
+    data = data.astype(np.float32)
+    data /= 255.0
 
     names = np.array(names)
 

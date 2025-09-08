@@ -140,7 +140,7 @@ class ControlWindow(ClusterWindow):
 
     _PARAM_RANGES = {'K': (2, 42),
                      'knn_k': (1, 30),
-                     'PCA': (0, 256)}
+                     'PCA': (0, 784)}
 
     def __init__(self, app, bbox_rel=None):
         super().__init__(app, bbox_rel)
@@ -166,6 +166,7 @@ class ControlWindow(ClusterWindow):
         }
         # set defaults here
         self.widgets['dist_metric_toggle'].set_value(DISTANCE_LABELS['euclidean'])
+        self.widgets['pca_slider'].set_value(0)
         self._cur_alg = self.widgets['alg'].get_value()
         self.app.refresh_alg()
 
@@ -255,6 +256,7 @@ class ControlWindow(ClusterWindow):
         self.app.update_params(self.get_params())
 
     def _k_change(self, value):
+        value=int(value)
         print("CHANGING K:", value)
         # enable run button
         self.widgets['run'].set_visible(True)
@@ -479,6 +481,9 @@ class CharsetWindow(ClusterWindow):
 class ResultsWindow(ClusterWindow):
     """
     Show the clusters sorted by size, w/in each cluster sorted by distance from cluster mean.
+    When clusters are showing, user selects each cluster to include by clicking on it, how much
+    of each cluster to include by dragging up/down.  User can un-select by dragging to the left.
+    Selected clusters are outlined in red, shaded proportionately.
     """
     _LAYOUT = {'indent_px': 10,
                'max_samples_per_cluster': 15*15,
@@ -496,11 +501,20 @@ class ResultsWindow(ClusterWindow):
         self._bkg_color = np.array(COLORS['OFF_WHITE_RGB']).reshape((1, 1, 3))
         self._clusters = []  # each is dict for each cluster:  bbox, is_selected, image
 
-    def update_results(self, assignments, distances, train_vec_info):
+        self._mouseover_ind=None
+        self._held_ind=None
+        self._click_xy = None
 
+        self._fractions=None
+
+    def update_results(self, assignments, distances, train_vec_info):
+        self._labels = np.unique(assignments)
         self._assignments = assignments
         self._distances = distances
         self._train_vec_info = train_vec_info
+        self._clusters = [{'bbox': None, 'label': lab,'is_selected': False, 'image': None} for lab in self._labels]
+        self._fractions = np.zeros(len(self._labels))  # how much of each cluster to select
+
         if self._bbox is not None:
             self.redraw()
 
@@ -509,7 +523,7 @@ class ResultsWindow(ClusterWindow):
         tiles = self.get_disp_tiles()
         w,h = self._bbox['x'][1]-self._bbox['x'][0], self._bbox['y'][1]-self._bbox['y'][0]
         
-        image,bboxes = make_assign_gallery(size=(w,h),
+        image, bboxes, labels = make_assign_gallery(size=(w,h), n_max=200,
                                     tiles=np.array(tiles),
                                     distances = self._distances,
                                     assignments=self._assignments,
@@ -520,8 +534,45 @@ class ResultsWindow(ClusterWindow):
             image = cv2.resize(image, (w,h), interpolation=cv2.INTER_AREA)
         self._bboxes = bboxes
         self._img = image
-        
 
+    def _update_mouseover(self, x, y):
+        self._mouseover_ind = None
+        for ind, cluster in enumerate(self._clusters):
+            bbox = self._bboxes[ind]
+            if bbox['x'][0] <= x <= bbox['x'][1] and bbox['y'][0] <= y <= bbox['y'][1]:
+                self._mouseover_ind = ind
+                break
+        return self._mouseover_ind
+    
+    def translate(self, x,y):
+        if self._bbox is None:
+            return (x,y)
+        return (x - self._bbox['x'][0], y - self._bbox['y'][0])
+    
+    def on_mouse(self, event, x, y, flags, param):
+        x, y = self.translate(x,y)
+        y_scale = 150  # pixels per 100 %
+
+        self._update_mouseover(x,y)
+        if event==cv2.EVENT_LBUTTONDOWN and self._mouseover_ind is not None:
+            self._click_xy = (x,y)
+            self._held_ind = self._mouseover_ind
+            self._clusters[self._held_ind]['is_selected'] = not self._clusters[self._held_ind]['is_selected']
+        elif event==cv2.EVENT_MOUSEMOVE and self._held_ind is not None and self._click_xy is not None:
+            dy = (self._click_xy[1] - y) / y_scale
+            frac = np.clip(dy, 0, 1)
+            self._fractions[self._held_ind] = frac
+            logging.info("Setting cluster %i fraction to %.2f", self._held_ind, frac)
+
+
+        elif event==cv2.EVENT_LBUTTONUP:
+            if self._held_ind is not None:
+                if self._fractions[self._held_ind]==0:
+                    self._clusters[self._held_ind]['is_selected'] = False
+                    logging.info("Un-selecting cluster %i", self._held_ind)
+            self._held_ind = None
+            self._click_xy = None
+                
     def get_disp_tiles(self):
         """
         Make a tile for every font in the training set, showing the specified character.
@@ -547,10 +598,6 @@ class ResultsWindow(ClusterWindow):
             self.redraw()
 
 
-    def on_mouse(self, event, x, y, flags, param):
-        pass
-
-    
 
     def _draw(self, image):
         if self._assignments is None:
@@ -558,7 +605,25 @@ class ResultsWindow(ClusterWindow):
         else:
             if self._img is not None:
                 image[self._bbox['y'][0]:self._bbox['y'][1], self._bbox['x'][0]:self._bbox['x'][1]] = self._img
-            #draw_bbox(image, self._bbox, 3, COLORS['DARK_NAVY_RGB'])
+            for ind, cluster in enumerate(self._clusters):
+                bbox = self._bboxes[ind]
+                bbox = {'x': (bbox['x'][0]+self._bbox['x'][0], bbox['x'][1]+self._bbox['x'][0]+1),
+                        'y': (bbox['y'][0]+self._bbox['y'][0], bbox['y'][1]+self._bbox['y'][0]+1)}
+                color=None
+                if self._mouseover_ind is not None and ind==self._mouseover_ind:
+                    color = COLORS['NEON_GREEN']    
+                if  cluster['is_selected'] or (self._held_ind is not None and ind==self._held_ind):
+                    color = COLORS['DARK_RED_RGB'] if  (self._held_ind is not None and ind==self._held_ind) else COLORS['SKY_BLUE']
+                    frac_pct_str = f"{int(self._fractions[ind]*100)}%"
+                    text_x = bbox['x'][0] + 5
+                    size=.65
+                    (w,h), b = cv2.getTextSize(frac_pct_str, cv2.FONT_HERSHEY_SIMPLEX, size, 1)
+
+                    text_y = bbox['y'][1] - 7 - h
+                    image[text_y:text_y+h+b, text_x:text_x+w+2] = COLORS['OFF_WHITE_RGB']
+                    cv2.putText(image, frac_pct_str, (text_x, text_y+h), cv2.FONT_HERSHEY_SIMPLEX, size, color, 1, cv2.LINE_AA)
+                if color is not None:
+                    draw_bbox(image, bbox, color=color, thickness=3, inside=True)
         return image
     
 class StatusWindow(ClusterWindow):
@@ -611,7 +676,7 @@ class FontClusterApp(object):
         
         self.data = AlphaNumericMNISTData(use_good_subset=False, test_train_split=0.0)
         self.disp_font_ind = 0
-        self.char_set = GOOD_CHAR_SET
+        self.char_set = []
         self.size = size
         self._last_pca_dims = -1
         # self._pca = PCA()

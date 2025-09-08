@@ -175,7 +175,7 @@ class KMeansAlgorithm(ClusteringAlgorithm):
         return self._find_closest_means(x)
     
     def draw_stats(self, image, bbox, color):
-        if not self._fit:
+        if not self._fit or (self.loss is None):
             lines = ["Cluster for stats"]
         else:
             lines = [f"KMeans: k={self.k}",
