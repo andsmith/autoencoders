@@ -40,7 +40,7 @@ import sys
 import argparse
 import pprint
 from mnist import AlphaNumericMNISTData
-from util import fit_spaced_intervals, draw_bbox, get_font_size,scale_bbox
+from util import fit_spaced_intervals, draw_bbox, get_font_size,scale_bbox, write_lines
 from abc import ABC, abstractmethod
 from tools import RadioButtons, Slider, Button, ToggleButton
 from clustering import KMeansAlgorithm, SpectralAlgorithm
@@ -518,6 +518,34 @@ class ResultsWindow(ClusterWindow):
         if self._bbox is not None:
             self.redraw()
 
+    def get_selection(self):
+        """
+        For each selected cluster return a dict with:
+            'font_inds': indices into the training set for fonts in this cluster
+            'font_dists': list of distances for each font in 'font_inds'
+            'frac': selected fraction used
+        for clusters with frac<1.0, use the most distant fonts first
+            
+        """
+        selection = []
+        if self._assignments is None:
+            return selection
+        for ind, cluster in enumerate(self._clusters):
+            if cluster['is_selected']:
+                font_inds = np.where(self._assignments == cluster['label'])[0].tolist()
+                font_dists = self._distances[self._assignments == cluster['label']].tolist()
+                frac = self._fractions[ind]
+                if frac < 1.0:
+                    sorted_inds = np.argsort(font_dists)[::-1]
+                    n_select = max(1, int(len(sorted_inds) * frac))
+                    font_inds = [font_inds[i] for i in sorted_inds[:n_select]]
+                    font_dists = [font_dists[i] for i in sorted_inds[:n_select]]
+                    # Adjust the fraction to account for the selected fonts
+                    frac = n_select / len(sorted_inds)
+                selection.append({'font_inds': font_inds,
+                                  'font_dists': font_dists,
+                                  'frac': frac})
+        return selection
     def redraw(self):
 
         tiles = self.get_disp_tiles()
@@ -597,8 +625,6 @@ class ResultsWindow(ClusterWindow):
         if self._assignments is not None:
             self.redraw()
 
-
-
     def _draw(self, image):
         if self._assignments is None:
             draw_bbox(image, self._bbox, 3, COLORS['DARK_NAVY_RGB'])
@@ -653,7 +679,27 @@ class StatusWindow(ClusterWindow):
         self.app.stats_artist.draw_stats(image, self._bbox, color=self._draw_color)
         return image
 
+class DatasetWindow(StatusWindow):
+    """
+    Show stats about the selected clusters (saved as the dataset when user clicks "Save"):
+        - n_clusters selected
+        - n_fonts selected
+        - n_train_samples with the "good" character set
+        - n_train_samples with all characters.
 
+    """
+    def _draw(self, image):
+        sel = self.app.windows['results_window'].get_selection()
+        if sel is not None:
+            lines = ['n clust: %i' % len(sel),
+                    'n fonts: %i' % sum([len(s['font_inds']) for s in sel]),
+                    'DS-S size: %i' % (sum([len(s['font_inds']) for s in sel]) * len(self.app.char_set)),
+                    'DS-G size: %i' % (sum([len(s['font_inds']) for s in sel]) * len(GOOD_CHAR_SET)),
+                    'DS-A size: %i' % (sum([len(s['font_inds']) for s in sel]) * 94)]
+        else:
+            lines = ['Select clusters']
+        write_lines(image, self._bbox, lines, pad_px=5, color=self._draw_color)
+        return image
 
 class FontClusterApp(object):
     """
@@ -665,9 +711,9 @@ class FontClusterApp(object):
     +-----------+                           |
     |  status   |                           |
     |           |                           |
-    +-----------+---------------------------+
-    |                                       |
-    |           Charset Window              |
+    +------+----+---------------------------+
+    |select|                                |
+    | info |    Charset Window              |
     +---------------------------------------+
 
     """
@@ -683,10 +729,12 @@ class FontClusterApp(object):
         # self._clusters = None
         self.clust_alg = None
         self.sim_graph=None
-        self.windows = {'cs_window': CharsetWindow(self, bbox_rel={'x': (.1, .9), 'y': (.8, 1.0)}),
+        self.windows = {'cs_window': CharsetWindow(self, bbox_rel={'x': (.14, 1.0), 'y': (.8, 1.0)}),
                         'ctrl_window': ControlWindow(self, bbox_rel={'x': (.01, .14), 'y': (.02, .4)}),
                         'results_window': ResultsWindow(self, bbox_rel={'x': (.15, 1.0), 'y': (.02, .8)}),
-                        'status_window': StatusWindow(self, bbox_rel={'x': (.01, .14), 'y': (.41, .79)})}
+                        'status_window': StatusWindow(self, bbox_rel={'x': (.01, .14), 'y': (.41, .79)}),
+                        'dataset_window': DatasetWindow(self, bbox_rel={'x': (.01, .14), 'y': (.8, 1.0)})
+                       }
 
         self.win_name = "Character Set"
         cv2.namedWindow(self.win_name, cv2.WINDOW_NORMAL)
