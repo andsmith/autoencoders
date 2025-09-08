@@ -35,6 +35,7 @@ from color_blit import draw_color_tiles_cython as color_blit
 from colors import COLORS
 from load_typographyMNIST import load_alphanumeric, GOOD_CHAR_SET
 from pca import PCA
+import json
 import os
 import sys
 import argparse
@@ -700,7 +701,55 @@ class DatasetWindow(StatusWindow):
             lines = ['Select clusters']
         write_lines(image, self._bbox, lines, pad_px=5, color=self._draw_color)
         return image
+    
+    def _draw_chars(self, selection):
+        """
+        Make an image showing all characters in the training set.
+        """
+        chars = GOOD_CHAR_SET
+        tw, th = 28,28
+        n_cols = len(chars)
+        n_rows = sum([len(s['font_inds']) for s in selection])
+        indent_x = 30
+        img = np.ones((n_rows*th, n_cols*tw+indent_x, 3), dtype=np.uint8)*255
+        img[:,:] = self._bkg_color
 
+
+        font_names = [self.app.data.font_names_train[i] for s in selection for i in s['font_inds']]
+        for row, font_name in enumerate(font_names):
+            print("Drawing row %i: %s"%(row, font_name))    
+            char_mask = self.app.data.font_names_train == font_name
+            x_train = self.app.data.x_train[char_mask]
+            y_train = self.app.data.labels_train[char_mask]
+            for col in range(n_cols):
+                print("\tchar %i: %s"%(col, chars[col]))
+                ind = np.where(y_train == chars[col])[0]
+                tile = x_train[ind].reshape((28,28,1)) 
+                tile_image = (self._draw_color * tile + self._bkg_color * (1-tile)).astype(np.uint8)    
+                x0, y0 = indent_x + col*tw, row*th
+                x1, y1 = x0+tw, y0+th
+                img[y0:y1, x0:x1] = tile_image
+        return img
+
+    def save(self):
+        import ipdb; ipdb.set_trace()
+        filename = "font_set.json"
+        sel  = self.app.windows['results_window'].get_selection()
+
+        for clust_info in sel:
+            clust_info['font_names'] = [self.app.data.font_names_train[i] for i in clust_info['font_inds']]
+        out_data = {'char_set': self.app.char_set,
+                    'clusters': sel}
+        
+        image=self._draw_chars(sel)
+
+        with open(filename, 'w') as f:
+            json.dump(out_data, f)
+        img_filename = "font_chars.png"
+        image=self._draw_chars(sel)
+        cv2.imwrite(img_filename, image)
+        logging.info("Saved dataset to %s and %s", filename, img_filename)
+        
 class FontClusterApp(object):
     """
     +-----------+---------------------------+
@@ -761,6 +810,7 @@ class FontClusterApp(object):
         # TODO:  implement clustering
         if self.x_train is None:
             self.update_preprocessing(params)
+        print(type(self.x_train))
         self._assignments,self._distances = self._cluster(self.x_train)
         print(len(np.unique(self._assignments)), "clusters found.")
         self.windows['results_window'].update_results( self._assignments, self._distances,self.train_vec_info)
@@ -810,7 +860,7 @@ class FontClusterApp(object):
             sim_graph_params = self._get_sim_graph_params(params)
 
             self._sim_graph = SIM_GRAPHS[sim_graph_name]['type'](**sim_graph_params)
-            self.clust_alg = SpectralAlgorithm(n_clusters=k)
+            self.clust_alg = SpectralAlgorithm(k=k)
             self.stats_artist = self._sim_graph
         else:
             raise ValueError("Unknown algorithm name: %s" % alg)
@@ -915,8 +965,7 @@ class FontClusterApp(object):
         logging.info("Exiting...")
 
     def save_clusters(self):
-        logging.info("Saving clusters...")
-        # TODO: Implement saving logic
+        self.windows['dataset_window'].save()
 
     def make_blank(self):
         blank = np.zeros((self.size[1], self.size[0], 3), dtype=np.uint8)

@@ -12,8 +12,7 @@ class ClusteringAlgorithm(ABC):
     Abstract class for clustering algorithms, plugins to the cluster creator.
     """
 
-    def __init__(self, name, k):
-        self._name = name
+    def __init__(self, k):
         self.k = k
         self._fit = False
 
@@ -89,7 +88,7 @@ class KMeansAlgorithm(ClusteringAlgorithm):
         :param random_state: random seed
 
         """
-        super().__init__('KMeans', k)
+        super().__init__( k)
         # self._kmeans = KMeans(n_clusters=k)
         self.which = distance_metric
         self.means = None
@@ -184,9 +183,8 @@ class KMeansAlgorithm(ClusteringAlgorithm):
 
 
 class SpectralAlgorithm(ClusteringAlgorithm):
-    def __init__(self, n_clusters, normalize=False):
-        super().__init__('Spectral', None)
-        self._n_clusters = n_clusters
+    def __init__(self, k, normalize=False):
+        super().__init__(k)
         self._normalize = normalize
         self._kmeans = None
 
@@ -217,15 +215,15 @@ class SpectralAlgorithm(ClusteringAlgorithm):
         self._eigvals, self._eigvecs = self._solve(sim_graph)
         if verbose:
             logging.info("Fitting Spectral clustering with %i clusters, %i features, normalize=%s.  Calculating eigenvectors...",
-                         self._n_clusters, self._n_clusters, self._normalize)
-        eig_features = self._eigvecs[:, :self._n_clusters]
+                         self.k, self.k, self._normalize)
+        eig_features = self._eigvecs[:, :self.k]
         if self._normalize:
             # normalize
             eig_features /= np.linalg.norm(eig_features, axis=1)[:, np.newaxis]
 
         # kmeans on eigenvectors
-        logging.info("Fitting KMeans to %s eigenvectors, with %i clusters...", eig_features.shape, self._n_clusters)
-        self._kmeans = KMeans(n_clusters=self._n_clusters)
+        logging.info("Fitting KMeans to %s eigenvectors, with %i clusters...", eig_features.shape, self.k)
+        self._kmeans = KMeans(n_clusters=self.k)
         self._kmeans.fit(eig_features)
         self._kmeans_dists = self._kmeans.transform(eig_features)
         self._fit = True
