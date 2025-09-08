@@ -735,6 +735,10 @@ class FontClusterApp(object):
     def _cluster(self, x_train):
         if self._sim_graph is not None:
             self._sim_graph.fit(x_train)  # already update in update_params
+            img = self._sim_graph.make_img()
+            #cv2.imshow("Similarity Graph", img)
+            #cv2.waitKey(0)
+            print(self._sim_graph._get_graph_stats())
             data = self._sim_graph 
         else:
             data = x_train

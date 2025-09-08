@@ -280,7 +280,39 @@ def test_kmeans():
     plt.show()
 
 
+def test_spectral():
+    import matplotlib.pyplot as plt
+    from similarity import EpsilonSimGraph
+
+
+    dim = 10
+    n_clusters = 3
+    spread = 3.0
+    centers = np.random.rand(n_clusters, dim)*10 * spread
+    def make_rand_covariance():
+        A = np.random.randn(dim, dim)
+        return np.dot(A, A.T)
+    covs = [make_rand_covariance() for _ in range(n_clusters)]
+    points = []
+    for i in range(n_clusters):
+        pts = np.random.multivariate_normal(centers[i], covs[i], size=300)
+        points.append(pts)
+
+    points = np.vstack(points)
+
+    sim_graph = EpsilonSimGraph( epsilon_rel=0.4)
+    sim_graph.fit(points)
+    print(sim_graph._get_graph_stats())
+    spectral = SpectralAlgorithm(n_clusters=n_clusters, normalize=True)
+    cluster_ids = spectral.fit(sim_graph, verbose=True)
+
+    plt.scatter(points[:, 0], points[:, 1], c=cluster_ids)
+    plt.title("Spectral Clustering")
+    plt.show()
+
+
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     # test_render_clustering()
-    test_kmeans()
+    # test_kmeans()
+    test_spectral()
