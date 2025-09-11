@@ -317,7 +317,6 @@ class EmbedTester(object):
             self.epz._frame = None  # force redraw
             
     def _do_analogy(self):
-        #import ipdb; ipdb.set_trace()
         a_source_code = self.embedder._codes[self.samples[0]]
         a_dest_code = self.embedder._codes[self.samples[1]]
         a_input_code = self.embedder._codes[self.samples[2]]

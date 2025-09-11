@@ -1,6 +1,7 @@
-
+import cv2
 import numpy as np
 from util import draw_bbox
+
 
 def diff_img(digit_true, digit_hat, thresh=0.1):
     """
@@ -121,7 +122,7 @@ def make_heterog_mosaic(size, imgs, pad_px=6, bkg_color=0):
                 img[y:y+img_wh[1], x:x+img_wh[0], ...] = im[:, :, ...]
                 placed[i] = True
                 bboxes.append({'x': (x, x + img_wh[0]), 'y': (y, y + img_wh[1])})
-                labels.append(i)
+                labels.append(sorted_indices[i])
                 x += img_wh[0] + pad_px
                 row_height = max(row_height, img_wh[1])
                 placed_in_row = True
@@ -135,7 +136,7 @@ def make_heterog_mosaic(size, imgs, pad_px=6, bkg_color=0):
     return img, bboxes, labels
 
 
-def make_heterog_mosaic_autosize(imgs, mosaic_aspect=1.7, pad_px=6, bkg_color=0,init_size=None):
+def make_heterog_mosaic_autosize(imgs, mosaic_aspect=1.7, pad_px=6, bkg_color=0, init_size=None):
     min_side = min(max(im.shape[0], im.shape[1]) for im in imgs)
     init_size = (int(min_side*mosaic_aspect+pad_px*2), int(min_side+pad_px*2)) if init_size is None else init_size
     done = False
@@ -199,7 +200,7 @@ def make_cluster_image(tiles, distances, n_max=100, aspect=1.7, bg_color=None):
     return img
 
 
-def make_assign_gallery(size, tiles, distances, assignments, n_max=200, pad_px=10, bgk_color=255):
+def make_assign_gallery(size, tiles, distances, assignments, n_max=200, pad_px=10, bgk_color=255, aspect=1.0):
     """
     Create a gallery of cluster images.
     :param size: (width, height) of output image
@@ -216,9 +217,23 @@ def make_assign_gallery(size, tiles, distances, assignments, n_max=200, pad_px=1
     images = [make_cluster_image(tiles[assignments == k], distances[assignments == k], n_max=n_max, aspect=1.0, bg_color=bgk_color)
               for k in cluster_ids]
     aspect = size[0]/size[1]
+    bgk_color = bgk_color if bgk_color is not None else 255
 
-    img, cluster_bboxes, labels = make_heterog_mosaic_autosize(
-        images, pad_px=pad_px, mosaic_aspect=aspect, bkg_color=bgk_color, init_size=size)
+    # DEBUG START
+    # for i, im in enumerate(images):
+    #     ch_h = 30
+    #     label = "%i" % cluster_ids[i]
+    #     txt_pos = (5, im.shape[0]-15)
+    #     im[txt_pos[1]-ch_h:txt_pos[1]+5, txt_pos[0]:txt_pos[0]+50] = 255  # white box for text
+    #     cv2.putText(im, label, txt_pos, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 0, 1, cv2.LINE_AA)
+    # DEBUG END
+
+    img, cluster_bboxes, labels = make_heterog_mosaic_autosize(images,
+                                                               pad_px=pad_px,
+                                                               mosaic_aspect=aspect,
+                                                               bkg_color=bgk_color,
+                                                               init_size=size,
+                                                               aspect=aspect)
 
     return img, cluster_bboxes, labels
 
@@ -275,7 +290,7 @@ def test_assign_gallery_bboxes():
     cv2.resizeWindow("Gallery", img.shape[1], img.shape[0])
 
     while True:
-        frame = img.copy() 
+        frame = img.copy()
         if selected[0] is not None:
             b = boxes[selected[0]]
             draw_bbox(frame, b, color=255, thickness=2)

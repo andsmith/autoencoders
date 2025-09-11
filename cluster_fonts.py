@@ -46,7 +46,7 @@ from abc import ABC, abstractmethod
 from tools import RadioButtons, Slider, Button, ToggleButton
 from clustering import KMeansAlgorithm, SpectralAlgorithm
 from similarity import EpsilonSimGraph, FullSimGraph, NNSimGraph
-from img_util import make_assign_gallery
+from img_util import make_assign_gallery, make_digit_mosaic
 
 SIM_GRAPHS = {'KNN': {'type':NNSimGraph,
                        'param': 'k'}}
@@ -404,6 +404,7 @@ class CharsetWindow(ClusterWindow):
         logging.info("CharsetWindow: toggled '%s', now %i chars:", char, len(self.app.char_set))
         logging.info("\t%s", self.app.char_set)
         self.app.windows['ctrl_window'].widgets['run'].set_visible(True)
+        self.app.clear_preprocessing()
 
     def _draw(self, image):
 
@@ -498,6 +499,7 @@ class ResultsWindow(ClusterWindow):
         self._train_vec_info = None
         self._img = None
         self._bbox= None
+        self._bboxes = None  # list of bboxes for each cluster
         self._fg_color = np.array(COLORS['DARK_NAVY_RGB']).reshape((1, 1, 3))
         self._bkg_color = np.array(COLORS['OFF_WHITE_RGB']).reshape((1, 1, 3))
         self._clusters = []  # each is dict for each cluster:  bbox, is_selected, image
@@ -509,14 +511,15 @@ class ResultsWindow(ClusterWindow):
         self._fractions=None
 
     def update_results(self, assignments, distances, train_vec_info):
+        print("_---------results window: update_results()")
         self._labels = np.unique(assignments)
         self._assignments = assignments
         self._distances = distances
         self._train_vec_info = train_vec_info
         self._clusters = [{'bbox': None, 'label': lab,'is_selected': False, 'image': None} for lab in self._labels]
         self._fractions = np.zeros(len(self._labels))  # how much of each cluster to select
-
-        if self._bbox is not None:
+        import ipdb; ipdb.set_trace()
+        if self._bbox is not None or self._bboxes is None:
             self.redraw()
 
     def get_selection(self):
@@ -531,31 +534,40 @@ class ResultsWindow(ClusterWindow):
         selection = []
         if self._assignments is None:
             return selection
+        
         for ind, cluster in enumerate(self._clusters):
+            label = self._cluster_labels[ind]
             if cluster['is_selected']:
-                font_inds = np.where(self._assignments == cluster['label'])[0].tolist()
-                font_dists = self._distances[self._assignments == cluster['label']].tolist()
+                
+                font_inds = np.where(self._assignments == label)[0].tolist()
+                font_dists = self._distances[self._assignments == label].tolist()
                 frac = self._fractions[ind]
+                font_names = [self._train_vec_info['font_names'][i] for i in font_inds]
                 if frac < 1.0:
                     sorted_inds = np.argsort(font_dists)[::-1]
                     n_select = max(1, int(len(sorted_inds) * frac))
                     font_inds = [font_inds[i] for i in sorted_inds[:n_select]]
                     font_dists = [font_dists[i] for i in sorted_inds[:n_select]]
+                    font_names = [font_names[i] for i in sorted_inds[:n_select]]
                     # Adjust the fraction to account for the selected fonts
                     frac = n_select / len(sorted_inds)
                 selection.append({'font_inds': font_inds,
                                   'font_dists': font_dists,
+                                  'font_names': font_names,
                                   'frac': frac})
+        #pprint.pprint(selection)
         return selection
+    
+
     def redraw(self):
 
-        tiles = self.get_disp_tiles()
         w,h = self._bbox['x'][1]-self._bbox['x'][0], self._bbox['y'][1]-self._bbox['y'][0]
-        
+        aspect= w/h if h>0 else 1.0
         image, bboxes, labels = make_assign_gallery(size=(w,h), n_max=200,
-                                    tiles=np.array(tiles),
+                                    tiles=np.array(self._train_vec_info['disp_icons']),
                                     distances = self._distances,
                                     assignments=self._assignments,
+                                    aspect=aspect,
                                     bgk_color=self._bkg_color)
 
         if image.shape[0]!=h or image.shape[1]!=w:
@@ -563,6 +575,7 @@ class ResultsWindow(ClusterWindow):
             image = cv2.resize(image, (w,h), interpolation=cv2.INTER_AREA)
         self._bboxes = bboxes
         self._img = image
+        self._cluster_labels = labels
 
     def _update_mouseover(self, x, y):
         self._mouseover_ind = None
@@ -591,7 +604,7 @@ class ResultsWindow(ClusterWindow):
             dy = (self._click_xy[1] - y) / y_scale
             frac = np.clip(dy, 0, 1)
             self._fractions[self._held_ind] = frac
-            logging.info("Setting cluster %i fraction to %.2f", self._held_ind, frac)
+            logging.info("Setting cluster %i fraction to %.2f", self._cluster_labels[self._held_ind], frac)
 
 
         elif event==cv2.EVENT_LBUTTONUP:
@@ -602,21 +615,8 @@ class ResultsWindow(ClusterWindow):
             self._held_ind = None
             self._click_xy = None
                 
-    def get_disp_tiles(self):
-        """
-        Make a tile for every font in the training set, showing the specified character.
-        """
-        tiles = []
-        char_ind = 0
-
-        for ind in range(len(self._train_vec_info['font_data'])):
-            font_vec = self._train_vec_info['font_data'][ind]
-            tile = font_vec[784*char_ind:784*(char_ind+1)].reshape((28,28,1)) 
-            tile_image = self._fg_color * tile + self._bkg_color * (1-tile)
-            tiles.append(tile_image.astype(np.uint8))
-        return tiles
-
     def resize(self, size):
+        print("__----------------ResultsWindow: resize to", size)
         left, right = int(self._bbox_rel['x'][0] * size[0]), int(self._bbox_rel['x'][1] * size[0])
         top, bottom = int(self._bbox_rel['y'][0] * size[1]), int(self._bbox_rel['y'][1] * size[1])
         width, height = right - left, bottom - top
@@ -643,7 +643,7 @@ class ResultsWindow(ClusterWindow):
                     color = COLORS['DARK_RED_RGB'] if  (self._held_ind is not None and ind==self._held_ind) else COLORS['SKY_BLUE']
                     frac_pct_str = f"{int(self._fractions[ind]*100)}%"
                     text_x = bbox['x'][0] + 5
-                    size=.65
+                    size=.5
                     (w,h), b = cv2.getTextSize(frac_pct_str, cv2.FONT_HERSHEY_SIMPLEX, size, 1)
 
                     text_y = bbox['y'][1] - 7 - h
@@ -689,7 +689,9 @@ class DatasetWindow(StatusWindow):
         - n_train_samples with all characters.
 
     """
+
     def _draw(self, image):
+        
         sel = self.app.windows['results_window'].get_selection()
         if sel is not None:
             lines = ['n clust: %i' % len(sel),
@@ -697,6 +699,12 @@ class DatasetWindow(StatusWindow):
                     'DS-S size: %i' % (sum([len(s['font_inds']) for s in sel]) * len(self.app.char_set)),
                     'DS-G size: %i' % (sum([len(s['font_inds']) for s in sel]) * len(GOOD_CHAR_SET)),
                     'DS-A size: %i' % (sum([len(s['font_inds']) for s in sel]) * 94)]
+            # print font names in the last cluster (highest label)
+            # if len(sel)>0:
+            #     print("Font names in last cluster (%i):"%len(sel[-1]['font_names']))
+            #     for font_name in sel[-1]['font_names']:
+            #         print(" - %s"%font_name)
+
         else:
             lines = ['Select clusters']
         write_lines(image, self._bbox, lines, pad_px=5, color=self._draw_color)
@@ -706,24 +714,26 @@ class DatasetWindow(StatusWindow):
         """
         Make an image showing all characters in the training set.
         """
-        chars = GOOD_CHAR_SET
+        chars = self.app.char_set
         tw, th = 28,28
         n_cols = len(chars)
         n_rows = sum([len(s['font_inds']) for s in selection])
-        indent_x = 30
+        indent_x = 0
         img = np.ones((n_rows*th, n_cols*tw+indent_x, 3), dtype=np.uint8)*255
         img[:,:] = self._bkg_color
 
 
         font_names = [self.app.data.font_names_train[i] for s in selection for i in s['font_inds']]
         for row, font_name in enumerate(font_names):
-            print("Drawing row %i: %s"%(row, font_name))    
             char_mask = self.app.data.font_names_train == font_name
             x_train = self.app.data.x_train[char_mask]
             y_train = self.app.data.labels_train[char_mask]
+            print("Drawing row %i: %s (%i chars)"%(row, font_name, len(y_train)))
             for col in range(n_cols):
                 print("\tchar %i: %s"%(col, chars[col]))
                 ind = np.where(y_train == chars[col])[0]
+                if len(ind)==0:
+                    continue
                 tile = x_train[ind].reshape((28,28,1)) 
                 tile_image = (self._draw_color * tile + self._bkg_color * (1-tile)).astype(np.uint8)    
                 x0, y0 = indent_x + col*tw, row*th
@@ -732,7 +742,6 @@ class DatasetWindow(StatusWindow):
         return img
 
     def save(self):
-        import ipdb; ipdb.set_trace()
         filename = "font_set.json"
         sel  = self.app.windows['results_window'].get_selection()
 
@@ -743,13 +752,13 @@ class DatasetWindow(StatusWindow):
         
         image=self._draw_chars(sel)
 
+
         with open(filename, 'w') as f:
             json.dump(out_data, f)
         img_filename = "font_chars.png"
-        image=self._draw_chars(sel)
-        cv2.imwrite(img_filename, image)
-        logging.info("Saved dataset to %s and %s", filename, img_filename)
-        
+        cv2.imwrite(img_filename, image[:, :, ::-1])
+        logging.info("Saved dataset (%i fonts, %i chars each) to %s and %s", len(sel), len(self.app.char_set), filename, img_filename)
+
 class FontClusterApp(object):
     """
     +-----------+---------------------------+
@@ -784,12 +793,19 @@ class FontClusterApp(object):
                         'status_window': StatusWindow(self, bbox_rel={'x': (.01, .14), 'y': (.41, .79)}),
                         'dataset_window': DatasetWindow(self, bbox_rel={'x': (.01, .14), 'y': (.8, 1.0)})
                        }
-
+        self._bkg_color = COLORS['OFF_WHITE_RGB']
+        self._draw_color = COLORS['DARK_NAVY_RGB']
         self.win_name = "Character Set"
         cv2.namedWindow(self.win_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(self.win_name, self.size[0], self.size[1])
         cv2.setMouseCallback(self.win_name, self.on_mouse)
         self.x_train = None
+
+    def vec_to_tile(self, vec):
+        
+        tile = vec.reshape((28,28,1)) 
+        tile_image = (self._draw_color * tile + self._bkg_color * (1-tile)).astype(np.uint8)    
+        return tile_image
 
     def update_k(self, k):
         if self.clust_alg is not None:
@@ -810,8 +826,16 @@ class FontClusterApp(object):
         # TODO:  implement clustering
         if self.x_train is None:
             self.update_preprocessing(params)
-        print(type(self.x_train))
         self._assignments,self._distances = self._cluster(self.x_train)
+        ### DEBUG
+        test_lab = np.max(self._assignments)
+        test_mask = self._assignments==test_lab
+        test_imgs = np.array(self.train_vec_info['disp_icons'])[test_mask]
+        test_img = make_digit_mosaic(test_imgs, 1.0, bkg=0)
+        print("Test cluster (%i) has %i fonts, showing %i."%(test_lab, test_mask.sum(), len(test_imgs)))
+        cv2.imshow("Test", test_img[:,:,::-1])
+        print("Test cluster fonts:", np.array(self.fonts_train)[test_mask])
+        ### END DEBUG
         print(len(np.unique(self._assignments)), "clusters found.")
         self.windows['results_window'].update_results( self._assignments, self._distances,self.train_vec_info)
 
@@ -871,7 +895,7 @@ class FontClusterApp(object):
             img = self._sim_graph.make_img()
             #cv2.imshow("Similarity Graph", img)
             #cv2.waitKey(0)
-            print(self._sim_graph._get_graph_stats())
+            # print(self._sim_graph._get_graph_stats())
             data = self._sim_graph 
         else:
             data = x_train
@@ -885,9 +909,11 @@ class FontClusterApp(object):
         height = 28 * len(train_vecs['font_names'])
         img = np.zeros((height, width), dtype=np.uint8)
         img[:] = 255
+        
         for f_ind, font in enumerate(train_vecs['font_names']):
             for c_ind, char in enumerate(self.char_set):
-                img[f_ind * 28:(f_ind + 1) * 28, c_ind * 28:(c_ind + 1) * 28] = (train_vecs['font_data'][f_ind][c_ind].reshape((28, 28)) * 255).astype(np.uint8)
+                data_ind = c_ind*28 *28
+                img[f_ind * 28:(f_ind + 1) * 28, c_ind * 28:(c_ind + 1) * 28] = (train_vecs['font_data'][f_ind][data_ind:data_ind+28*28].reshape((28, 28)) * 255).astype(np.uint8)
         return img
 
     def _preprocess(self, params):
@@ -896,15 +922,21 @@ class FontClusterApp(object):
         step 2  convert to "font vectors":
            For each font with all selected chars represented, concatenate the character images into a single vector.
         Step 3  apply PCA (if pca_dims > 0).
+
+        Also:
+           * Make images for representatives of each font for displaying the clustering result. 
+             (The image is the first character in the selected set.)
         """
         # step 1,2, make vectors
         train_vecs = {'font_names': [],
-                      'font_data': [],}
+                      'font_data': [],
+                      'disp_icons': []}
         fonts = np.sort(np.unique(self.data.font_names_train))
         logging.info("Data has %i fonts.", len(fonts))
         chars = np.sort(self.char_set)
         char_mask = np.isin(self.data.labels_train, chars)
         n_chars = len(chars)
+        logging.info("Using %i chars, %i total samples exist.", n_chars, char_mask.sum())
 
         for font in fonts:
             font_mask = (self.data.font_names_train == font) & char_mask
@@ -912,10 +944,14 @@ class FontClusterApp(object):
             if n_chars == font_labels.size:
                 order = np.argsort(font_labels)
                 font_data = self.data.x_train[font_mask][order]
+                icon_data = font_data[0].reshape((28, 28, 1))
+                train_vecs['disp_icons'].append(self.vec_to_tile(icon_data))
                 train_vecs['font_names'].append(font)
                 train_vecs['font_data'].append(font_data.flatten())
-        # test_img =self._make_img(train_vecs)
-        # cv2.imwrite("test_vecs.png", test_img)
+
+        test_img =self._make_img(train_vecs)
+        cv2.imwrite("test_vecs.png", test_img)
+        logging.info("Wrote test vector image with %i samples to 'test_vecs.png'", len(train_vecs['font_names']))
 
         logging.info("After subsetting, %i fonts have all %i chars.", len(train_vecs['font_names']), len(self.char_set))
         

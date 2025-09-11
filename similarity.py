@@ -357,7 +357,7 @@ class NNSimGraph(SimilarityGraph):
         logging.info("Building %s-NN graph with k=%i, mutual=%s",
                      "Mutual" if self._mutual else "Asymmetric", self._k, self._mutual)
         nbrs = NearestNeighbors(n_neighbors=self._k+1, algorithm='ball_tree').fit(self._points)
-        logging.info("Fitted NearestNeighbors modelm, computing graph...")
+        logging.info("Fitted NearestNeighbors model, computing graph...")
         edge_mat = nbrs.kneighbors_graph(self._points, mode='connectivity').toarray()
 
         if self._mutual:
