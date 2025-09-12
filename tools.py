@@ -213,7 +213,7 @@ class Slider(Tool):
         test_val = self._range[1]
         test_str = self._txt_name + self._format_str % (test_val,)
 
-        self._font_size, _ = calc_font_size([test_str], self._text_bbox, self._font, 0)
+        self._font_size, _ = calc_font_size([test_str], self._text_bbox, self._font, 0, incl_baseline=True)
         title_dims, baseline = cv2.getTextSize(test_str, self._font, self._font_size, 1)
         left = self._bbox['x'][0] + self._spacing_px
         top = self._bbox['y'][0] + title_dims[1] + self._spacing_px + baseline
@@ -547,7 +547,7 @@ class RadioButtons(Tool):
         height, width = self._bbox['y'][1] - self._bbox['y'][0], self._bbox['x'][1] - self._bbox['x'][0]
         y_intervals = fit_spaced_intervals(self._bbox['y'], n_text_lines, 0.0, fill_extent=True)
         line_h = y_intervals[0][1] - y_intervals[0][0]
-        title_h = int(line_h * 1.5)
+        title_h = int(line_h * 1.25)
         self._title_font_size, pos_rel, self._title_thickness = get_font_size(
             self._title, (width-self._spacing_px*2, title_h), incl_baseline=False, font=self._font)
         self._title_pos = (self._spacing_px + self._bbox['x'][0], pos_rel[1] + self._bbox['y'][0])

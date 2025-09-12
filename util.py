@@ -7,7 +7,6 @@ import seaborn as sns
 import cv2
 
 
-
 def image_from_floats(floats, small=None, big=None):
     small = floats.min() if small is None else small
     big = floats.max() if big is None else big
@@ -167,6 +166,28 @@ def test_make_data(d=3, plot=True):
         plt.tight_layout()
         plt.show()
 
+
+def split_bbox(bbox, weight=0.5, orient='v'):
+    """
+    Split a bounding box into two parts.
+    :param bbox: The bounding box to split.
+    :param weight: The relative weight of the first part.
+    :param orient: The orientation of the split ('v' for vertical, 'h' for horizontal).
+    :return: Two bounding boxes representing the split.
+    """
+    if orient == 'v':
+        # Vertical split
+        (x1, x2), (y1, y2) = bbox['x'], bbox['y']
+        split_x = int(x1 + (x2 - x1) * weight)
+        rv = {'x': (x1, split_x), 'y': (y1, y2)}, {'x': (split_x, x2), 'y': (y1, y2)}
+    else:
+        # Horizontal split
+        (x1, x2), (y1, y2) = bbox['x'], bbox['y']
+        split_y = int(y1 + (y2 - y1) * weight)
+        rv = {'x': (x1, x2), 'y': (y1, split_y)}, {'x': (x1, x2), 'y': (split_y, y2)}
+    return rv
+
+
 def scale_bbox(bbox, scale):
     """
     Scale a bounding box by a given factor.
@@ -181,6 +202,7 @@ def scale_bbox(bbox, scale):
         'y': (int(y_min * scale[1]), int(y_max * scale[1]))
     }
     return new_bbox
+
 
 def get_font_size(text, size_wh, incl_baseline=False, max_scale=10.0, pad=5, font=cv2.FONT_HERSHEY_DUPLEX):
     """
@@ -208,6 +230,7 @@ def get_font_size(text, size_wh, incl_baseline=False, max_scale=10.0, pad=5, fon
 
     return font_scale, (text_x, text_y), thickness
 
+
 def get_best_font_size(lines, size_wh, *args, **kwargs):
     """
     Get the largest font that will fit all lines in the given box size.
@@ -222,8 +245,9 @@ def get_best_font_size(lines, size_wh, *args, **kwargs):
             best_thickness = thickness
     return best_scale, best_thickness
 
+
 def test_get_font_size():
-    strings = ['#','test_string 1']
+    strings = ['#', 'test_string 1']
     box_sizes = [(100, 30), (50, 20), (200, 100), (400, 100), (300, 40)]
     pad = 10
     h = np.sum([b[1] + pad for b in box_sizes]) + pad
@@ -239,16 +263,17 @@ def test_get_font_size():
             boxes[string].append({'x': (x, x + w), 'y': (y, y + h)})
             y += h + pad
         x = mid + pad//2
-        
+
     for string in boxes:
         for box in boxes[string]:
             draw_bbox(blank_img, box, 2, color=(255, 255, 255))
             box_w, box_h = box['x'][1] - box['x'][0], box['y'][1] - box['y'][0]
-            #import ipdb; ipdb.set_trace()
+            # import ipdb; ipdb.set_trace()
             incl_baseline = len(string) == 1
             font_scale, pos_xy_rel, thickness = get_font_size(string, (box_w, box_h), incl_baseline=incl_baseline)
             pos_xy = (pos_xy_rel[0] + box['x'][0], pos_xy_rel[1] + box['y'][0])
-            cv2.putText(blank_img, string, pos_xy, cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+            cv2.putText(blank_img, string, pos_xy, cv2.FONT_HERSHEY_SIMPLEX,
+                        font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
     plt.imshow(blank_img)
     plt.axis('off')
     plt.show()
@@ -340,6 +365,7 @@ def write_lines(img, bbox, lines, pad_px, font=cv2.FONT_HERSHEY_SIMPLEX, color=(
     for i, line in enumerate(lines):
         org = (x_span[0], int(line_y[i][0] + (line_y[i][1]-line_y[i][0]+font_size)//2))
         cv2.putText(img, line, org, font, font_size, color, font_thick, cv2.LINE_AA)
+
 
 def draw_bbox(image, bbox, thickness=1, inside=True, color=(128, 128, 128)):
     """

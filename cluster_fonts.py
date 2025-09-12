@@ -41,25 +41,28 @@ import sys
 import argparse
 import pprint
 from mnist import AlphaNumericMNISTData
-from util import fit_spaced_intervals, draw_bbox, get_font_size,scale_bbox, write_lines
+from util import fit_spaced_intervals, draw_bbox, get_font_size, scale_bbox, write_lines, split_bbox
 from abc import ABC, abstractmethod
 from tools import RadioButtons, Slider, Button, ToggleButton
-from clustering import KMeansAlgorithm, SpectralAlgorithm
-from similarity import EpsilonSimGraph, FullSimGraph, NNSimGraph
+from clustering import KMeansAlgorithm, SpectralAlgorithm, DBScanAlgorithm, DBScanManualAlgorithm
+from similarity import NNSimGraph
 from img_util import make_assign_gallery, make_digit_mosaic
 
-SIM_GRAPHS = {'KNN': {'type':NNSimGraph,
-                       'param': 'k'}}
-            #   'Epsilon': {'type':EpsilonSimGraph,
-            #              'param': 'epsilon_rel'},
-            #   'Full': {'type':FullSimGraph,
-            #            'param': 'sigma_rel'}}
+SIM_GRAPHS = {'KNN': {'type': NNSimGraph,
+                      'param': 'k'}}
+#   'Epsilon': {'type':EpsilonSimGraph,
+#              'param': 'epsilon_rel'},
+#   'Full': {'type':FullSimGraph,
+#            'param': 'sigma_rel'}}
 
 ALGS = {'KMeans': KMeansAlgorithm,
-        'Spectral': SpectralAlgorithm}
+        'Spectral': SpectralAlgorithm,
+        'DBScan-auto': DBScanAlgorithm,
+        'DBScan': DBScanManualAlgorithm}
 
-DISTANCE_LABELS = {'euclidean':"EUC-D", 
-                   'cosine':'COS-D'}
+DISTANCE_LABELS = {'euclidean': "EUC-D",
+                   'cosine': 'COS-D'}
+
 
 class ClusterWindow(ABC):
     def __init__(self, app, bbox_rel=None):
@@ -91,28 +94,6 @@ class ClusterWindow(ABC):
         return self._draw(image)
 
 
-def split_bbox(bbox, weight=0.5, orient='v'):
-    """
-    Split a bounding box into two parts.
-    :param bbox: The bounding box to split.
-    :param weight: The relative weight of the first part.
-    :param orient: The orientation of the split ('v' for vertical, 'h' for horizontal).
-    :return: Two bounding boxes representing the split.
-    """
-    if orient == 'v':
-        # Vertical split
-        (x1, x2), (y1, y2) = bbox['x'], bbox['y']
-        split_x = int(x1 + (x2 - x1) * weight)
-        rv = {'x': (x1, split_x), 'y': (y1, y2)}, {'x': (split_x, x2), 'y': (y1, y2)}
-    else:
-        # Horizontal split
-        (x1, x2), (y1, y2) = bbox['x'], bbox['y']
-        split_y = int(y1 + (y2 - y1) * weight)
-        rv = {'x': (x1, x2), 'y': (y1, split_y)}, {'x': (x1, x2), 'y': (split_y, y2)}
-    print("Split", bbox, "into BBoxes", rv, orient)
-    return rv
-
-
 class ControlWindow(ClusterWindow):
     """
             +--------------------+
@@ -133,7 +114,7 @@ class ControlWindow(ClusterWindow):
     """
     _LAYOUT = {'indent_px': 0,
                'area_names': ['alg', 'param', 'sim-param', 'action'],
-               'area_weights': [2.5, 3.5, 1.5,  1.5],  # 5 vertical areas of the control window
+               'area_weights': [5, 4, 3, 1],  # 5 vertical areas of the control window
                'pad_weight': .25}
 
     _ALGORITHMS = [k for k in ALGS.keys()]
@@ -158,9 +139,11 @@ class ControlWindow(ClusterWindow):
             'whiten_toggle': ToggleButton(self._whiten_toggle_bbox, label='Norm', callback=self._preproc_change),
             'knn_k': Slider(self._simgraph_param_split_bbox, label='KNN K', callback=self._param_change, default=5, range=self._PARAM_RANGES['knn_k'], format_str=int_fmt_str),
             'knn_mutual_toggle': ToggleButton(self._simgraph_toggle_bbox, label='Mutual', callback=self._param_change),
-            'dist_metric_toggle': ToggleButton(self._dist_metric_toggle_bbox, 
-                                               label=DISTANCE_LABELS['euclidean'], 
-                                               alt_label=DISTANCE_LABELS['cosine'], 
+            'dbscan_min_size': Slider(self._db_scan_min_size_bbox, label='Min Size', callback=self._param_change, default=5, range=(1, 20), format_str=int_fmt_str),
+            'dbscan_eps': Slider(self._db_scan_eps_bbox, label='Epsilon', callback=self._param_change, default=0.05, range=(0.0, 1.0), format_str=": %.1f"),
+            'dist_metric_toggle': ToggleButton(self._dist_metric_toggle_bbox,
+                                               label=DISTANCE_LABELS['euclidean'],
+                                               alt_label=DISTANCE_LABELS['cosine'],
                                                callback=self._param_change),
             'run': Button(self._run_bbox, label='Cluster', callback=self._run, border_indent=8),
             'save': Button(self._save_bbox, label='Save', callback=self.app.save_clusters, border_indent=6)
@@ -187,14 +170,17 @@ class ControlWindow(ClusterWindow):
             self._area_bboxes[area_name] = {'x': (left, right), 'y': (int(y), int(y + area_height))}
             y += area_height + unit_height * self._LAYOUT['pad_weight']
 
-        # THe slider areas need to be split
-        self._k_slider_bbox, temp = split_bbox(self._area_bboxes['param'], weight=0.5, orient='h')
+        # These slider areas need to be split
+        self._k_slider_bbox, temp = split_bbox(self._area_bboxes['param'], weight=0.4, orient='h')
         self._pca_slider_bbox, temp = split_bbox(temp, weight=0.66, orient='v')
         self._whiten_toggle_bbox, self._dist_metric_toggle_bbox = split_bbox(temp, weight=0.5, orient='h')
         self._simgraph_param_split_bbox, self._simgraph_toggle_bbox = split_bbox(
             self._area_bboxes['sim-param'], weight=0.75, orient='v')
         self._simgraph_param_full_bbox = self._area_bboxes['sim-param']
         self._run_bbox, self._save_bbox = split_bbox(self._area_bboxes['action'], weight=0.66, orient='v')
+
+        self._db_scan_min_size_bbox, self._db_scan_eps_bbox = split_bbox(
+            self._area_bboxes['sim-param'], weight=0.5, orient='h')
 
         # initialize or move widgets
         if self.widgets is None:
@@ -210,6 +196,8 @@ class ControlWindow(ClusterWindow):
             self.widgets['knn_mutual_toggle'].move_to(self._simgraph_toggle_bbox)
             self.widgets['run'].move_to(self._run_bbox)
             self.widgets['save'].move_to(self._save_bbox)
+            self.widgets['dbscan_min_size'].move_to(self._db_scan_min_size_bbox)
+            self.widgets['dbscan_eps'].move_to(self._db_scan_eps_bbox)
 
     def get_params(self):
         return {'pca_dims': int(self.widgets['pca_slider'].get_value()),
@@ -218,7 +206,10 @@ class ControlWindow(ClusterWindow):
                 'k_slider': int(self.widgets['k_slider'].get_value()),
                 'dist_metric_name': self.widgets['dist_metric_toggle'].get_value(),
                 'knn_k': int(self.widgets['knn_k'].get_value()),
-                'knn_mutual_toggle': self.widgets['knn_mutual_toggle'].get_value()}
+                'knn_mutual_toggle': self.widgets['knn_mutual_toggle'].get_value(),
+                'dbscan_min_size': int(self.widgets['dbscan_min_size'].get_value()),
+                'dbscan_eps': float(self.widgets['dbscan_eps'].get_value())
+                }
 
     def _draw(self, image):
         # draw_bbox(image, self._bbox, 3, COLORS['DARK_NAVY_RGB'])
@@ -239,17 +230,38 @@ class ControlWindow(ClusterWindow):
         if alg_name == 'KMeans':
             self.widgets['knn_k'].set_visible(False)
             self.widgets['knn_mutual_toggle'].set_visible(False)
+            self.widgets['dbscan_min_size'].set_visible(False)
+            self.widgets['dbscan_eps'].set_visible(False)
+            self.widgets['k_slider'].set_visible(True)  
 
         elif alg_name == 'Spectral':
             self.widgets['knn_k'].set_visible(True)
             self.widgets['knn_mutual_toggle'].set_visible(True)
+            self.widgets['dbscan_min_size'].set_visible(False)
+            self.widgets['dbscan_eps'].set_visible(False)
+            self.widgets['k_slider'].set_visible(True)  
+
+        elif alg_name == 'DBScan-auto':
+            self.widgets['knn_k'].set_visible(False)
+            self.widgets['knn_mutual_toggle'].set_visible(False)
+            self.widgets['dbscan_min_size'].set_visible(True)
+            self.widgets['dbscan_eps'].set_visible(False)
+            self.widgets['k_slider'].set_visible(True)  
+
+        elif alg_name == 'DBScan':
+            self.widgets['knn_k'].set_visible(False)
+            self.widgets['knn_mutual_toggle'].set_visible(False)
+            self.widgets['dbscan_min_size'].set_visible(True)
+            self.widgets['dbscan_eps'].set_visible(True)
+            self.widgets['k_slider'].set_visible(False)  # K not used for DBScan
+
         else:
             raise ValueError("Unknown algorithm name: %s" % alg_name)
-        
+
         self.widgets['run'].set_visible(True)
         self._cur_alg = alg_name
         self.app.refresh_alg()
-        
+
     def _param_change(self, value):
         print("CHANGING PARAMS:", value)
         # enable run button
@@ -257,7 +269,7 @@ class ControlWindow(ClusterWindow):
         self.app.update_params(self.get_params())
 
     def _k_change(self, value):
-        value=int(value)
+        value = int(value)
         print("CHANGING K:", value)
         # enable run button
         self.widgets['run'].set_visible(True)
@@ -498,17 +510,17 @@ class ResultsWindow(ClusterWindow):
         self._distances = None
         self._train_vec_info = None
         self._img = None
-        self._bbox= None
+        self._bbox = None
         self._bboxes = None  # list of bboxes for each cluster
         self._fg_color = np.array(COLORS['DARK_NAVY_RGB']).reshape((1, 1, 3))
         self._bkg_color = np.array(COLORS['OFF_WHITE_RGB']).reshape((1, 1, 3))
         self._clusters = []  # each is dict for each cluster:  bbox, is_selected, image
 
-        self._mouseover_ind=None
-        self._held_ind=None
+        self._mouseover_ind = None
+        self._held_ind = None
         self._click_xy = None
 
-        self._fractions=None
+        self._fractions = None
 
     def update_results(self, assignments, distances, train_vec_info):
         print("_---------results window: update_results()")
@@ -516,9 +528,10 @@ class ResultsWindow(ClusterWindow):
         self._assignments = assignments
         self._distances = distances
         self._train_vec_info = train_vec_info
-        self._clusters = [{'bbox': None, 'label': lab,'is_selected': False, 'image': None} for lab in self._labels]
+        self._clusters = [{'bbox': None, 'label': lab, 'is_selected': False, 'image': None} for lab in self._labels]
         self._fractions = np.zeros(len(self._labels))  # how much of each cluster to select
-        import ipdb; ipdb.set_trace()
+        import ipdb
+        ipdb.set_trace()    
         if self._bbox is not None or self._bboxes is None:
             self.redraw()
 
@@ -529,16 +542,16 @@ class ResultsWindow(ClusterWindow):
             'font_dists': list of distances for each font in 'font_inds'
             'frac': selected fraction used
         for clusters with frac<1.0, use the most distant fonts first
-            
+
         """
         selection = []
         if self._assignments is None:
             return selection
-        
+
         for ind, cluster in enumerate(self._clusters):
             label = self._cluster_labels[ind]
             if cluster['is_selected']:
-                
+
                 font_inds = np.where(self._assignments == label)[0].tolist()
                 font_dists = self._distances[self._assignments == label].tolist()
                 frac = self._fractions[ind]
@@ -555,24 +568,23 @@ class ResultsWindow(ClusterWindow):
                                   'font_dists': font_dists,
                                   'font_names': font_names,
                                   'frac': frac})
-        #pprint.pprint(selection)
+        # pprint.pprint(selection)
         return selection
-    
 
     def redraw(self):
 
-        w,h = self._bbox['x'][1]-self._bbox['x'][0], self._bbox['y'][1]-self._bbox['y'][0]
-        aspect= w/h if h>0 else 1.0
-        image, bboxes, labels = make_assign_gallery(size=(w,h), n_max=200,
-                                    tiles=np.array(self._train_vec_info['disp_icons']),
-                                    distances = self._distances,
-                                    assignments=self._assignments,
-                                    aspect=aspect,
-                                    bgk_color=self._bkg_color)
+        w, h = self._bbox['x'][1]-self._bbox['x'][0], self._bbox['y'][1]-self._bbox['y'][0]
+        aspect = w/h if h > 0 else 1.0
+        image, bboxes, labels = make_assign_gallery(size=(w, h), n_max=200,
+                                                    tiles=np.array(self._train_vec_info['disp_icons']),
+                                                    distances=self._distances,
+                                                    assignments=self._assignments,
+                                                    aspect=aspect,
+                                                    bgk_color=self._bkg_color)
 
-        if image.shape[0]!=h or image.shape[1]!=w:
+        if image.shape[0] != h or image.shape[1] != w:
             bboxes = [scale_bbox(bbox, (w/image.shape[1], h/image.shape[0])) for bbox in bboxes]
-            image = cv2.resize(image, (w,h), interpolation=cv2.INTER_AREA)
+            image = cv2.resize(image, (w, h), interpolation=cv2.INTER_AREA)
         self._bboxes = bboxes
         self._img = image
         self._cluster_labels = labels
@@ -585,36 +597,35 @@ class ResultsWindow(ClusterWindow):
                 self._mouseover_ind = ind
                 break
         return self._mouseover_ind
-    
-    def translate(self, x,y):
+
+    def translate(self, x, y):
         if self._bbox is None:
-            return (x,y)
+            return (x, y)
         return (x - self._bbox['x'][0], y - self._bbox['y'][0])
-    
+
     def on_mouse(self, event, x, y, flags, param):
-        x, y = self.translate(x,y)
+        x, y = self.translate(x, y)
         y_scale = 150  # pixels per 100 %
 
-        self._update_mouseover(x,y)
-        if event==cv2.EVENT_LBUTTONDOWN and self._mouseover_ind is not None:
-            self._click_xy = (x,y)
+        self._update_mouseover(x, y)
+        if event == cv2.EVENT_LBUTTONDOWN and self._mouseover_ind is not None:
+            self._click_xy = (x, y)
             self._held_ind = self._mouseover_ind
             self._clusters[self._held_ind]['is_selected'] = not self._clusters[self._held_ind]['is_selected']
-        elif event==cv2.EVENT_MOUSEMOVE and self._held_ind is not None and self._click_xy is not None:
+        elif event == cv2.EVENT_MOUSEMOVE and self._held_ind is not None and self._click_xy is not None:
             dy = (self._click_xy[1] - y) / y_scale
             frac = np.clip(dy, 0, 1)
             self._fractions[self._held_ind] = frac
             logging.info("Setting cluster %i fraction to %.2f", self._cluster_labels[self._held_ind], frac)
 
-
-        elif event==cv2.EVENT_LBUTTONUP:
+        elif event == cv2.EVENT_LBUTTONUP:
             if self._held_ind is not None:
-                if self._fractions[self._held_ind]==0:
+                if self._fractions[self._held_ind] == 0:
                     self._clusters[self._held_ind]['is_selected'] = False
                     logging.info("Un-selecting cluster %i", self._held_ind)
             self._held_ind = None
             self._click_xy = None
-                
+
     def resize(self, size):
         print("__----------------ResultsWindow: resize to", size)
         left, right = int(self._bbox_rel['x'][0] * size[0]), int(self._bbox_rel['x'][1] * size[0])
@@ -636,27 +647,31 @@ class ResultsWindow(ClusterWindow):
                 bbox = self._bboxes[ind]
                 bbox = {'x': (bbox['x'][0]+self._bbox['x'][0], bbox['x'][1]+self._bbox['x'][0]+1),
                         'y': (bbox['y'][0]+self._bbox['y'][0], bbox['y'][1]+self._bbox['y'][0]+1)}
-                color=None
-                if self._mouseover_ind is not None and ind==self._mouseover_ind:
-                    color = COLORS['NEON_GREEN']    
-                if  cluster['is_selected'] or (self._held_ind is not None and ind==self._held_ind):
-                    color = COLORS['DARK_RED_RGB'] if  (self._held_ind is not None and ind==self._held_ind) else COLORS['SKY_BLUE']
+                color = None
+                if self._mouseover_ind is not None and ind == self._mouseover_ind:
+                    color = COLORS['NEON_GREEN']
+                if cluster['is_selected'] or (self._held_ind is not None and ind == self._held_ind):
+                    color = COLORS['DARK_RED_RGB'] if (
+                        self._held_ind is not None and ind == self._held_ind) else COLORS['SKY_BLUE']
                     frac_pct_str = f"{int(self._fractions[ind]*100)}%"
                     text_x = bbox['x'][0] + 5
-                    size=.5
-                    (w,h), b = cv2.getTextSize(frac_pct_str, cv2.FONT_HERSHEY_SIMPLEX, size, 1)
+                    size = .5
+                    (w, h), b = cv2.getTextSize(frac_pct_str, cv2.FONT_HERSHEY_SIMPLEX, size, 1)
 
                     text_y = bbox['y'][1] - 7 - h
                     image[text_y:text_y+h+b, text_x:text_x+w+2] = COLORS['OFF_WHITE_RGB']
-                    cv2.putText(image, frac_pct_str, (text_x, text_y+h), cv2.FONT_HERSHEY_SIMPLEX, size, color, 1, cv2.LINE_AA)
+                    cv2.putText(image, frac_pct_str, (text_x, text_y+h),
+                                cv2.FONT_HERSHEY_SIMPLEX, size, color, 1, cv2.LINE_AA)
                 if color is not None:
                     draw_bbox(image, bbox, color=color, thickness=3, inside=True)
         return image
-    
+
+
 class StatusWindow(ClusterWindow):
     """
     Print stats from the clustering algorithm.
     """
+
     def __init__(self, app, bbox_rel=None):
         super().__init__(app, bbox_rel)
         self._frame_out = None
@@ -672,13 +687,14 @@ class StatusWindow(ClusterWindow):
         self._aspect = width / height if height > 0 else 0
         self._frame_out = np.zeros((height, width, 3), dtype=np.uint8)
         self._frame_out[:] = self._bkg_color
-    
+
     def on_mouse(self, event, x, y, flags, param):
         pass
 
     def _draw(self, image):
         self.app.stats_artist.draw_stats(image, self._bbox, color=self._draw_color)
         return image
+
 
 class DatasetWindow(StatusWindow):
     """
@@ -691,14 +707,14 @@ class DatasetWindow(StatusWindow):
     """
 
     def _draw(self, image):
-        
+
         sel = self.app.windows['results_window'].get_selection()
         if sel is not None:
             lines = ['n clust: %i' % len(sel),
-                    'n fonts: %i' % sum([len(s['font_inds']) for s in sel]),
-                    'DS-S size: %i' % (sum([len(s['font_inds']) for s in sel]) * len(self.app.char_set)),
-                    'DS-G size: %i' % (sum([len(s['font_inds']) for s in sel]) * len(GOOD_CHAR_SET)),
-                    'DS-A size: %i' % (sum([len(s['font_inds']) for s in sel]) * 94)]
+                     'n fonts: %i' % sum([len(s['font_inds']) for s in sel]),
+                     'DS-S size: %i' % (sum([len(s['font_inds']) for s in sel]) * len(self.app.char_set)),
+                     'DS-G size: %i' % (sum([len(s['font_inds']) for s in sel]) * len(GOOD_CHAR_SET)),
+                     'DS-A size: %i' % (sum([len(s['font_inds']) for s in sel]) * 94)]
             # print font names in the last cluster (highest label)
             # if len(sel)>0:
             #     print("Font names in last cluster (%i):"%len(sel[-1]['font_names']))
@@ -709,33 +725,32 @@ class DatasetWindow(StatusWindow):
             lines = ['Select clusters']
         write_lines(image, self._bbox, lines, pad_px=5, color=self._draw_color)
         return image
-    
+
     def _draw_chars(self, selection):
         """
         Make an image showing all characters in the training set.
         """
         chars = self.app.char_set
-        tw, th = 28,28
+        tw, th = 28, 28
         n_cols = len(chars)
         n_rows = sum([len(s['font_inds']) for s in selection])
         indent_x = 0
         img = np.ones((n_rows*th, n_cols*tw+indent_x, 3), dtype=np.uint8)*255
-        img[:,:] = self._bkg_color
-
+        img[:, :] = self._bkg_color
 
         font_names = [self.app.data.font_names_train[i] for s in selection for i in s['font_inds']]
         for row, font_name in enumerate(font_names):
             char_mask = self.app.data.font_names_train == font_name
             x_train = self.app.data.x_train[char_mask]
             y_train = self.app.data.labels_train[char_mask]
-            print("Drawing row %i: %s (%i chars)"%(row, font_name, len(y_train)))
+            print("Drawing row %i: %s (%i chars)" % (row, font_name, len(y_train)))
             for col in range(n_cols):
-                print("\tchar %i: %s"%(col, chars[col]))
+                print("\tchar %i: %s" % (col, chars[col]))
                 ind = np.where(y_train == chars[col])[0]
-                if len(ind)==0:
+                if len(ind) == 0:
                     continue
-                tile = x_train[ind].reshape((28,28,1)) 
-                tile_image = (self._draw_color * tile + self._bkg_color * (1-tile)).astype(np.uint8)    
+                tile = x_train[ind].reshape((28, 28, 1))
+                tile_image = (self._draw_color * tile + self._bkg_color * (1-tile)).astype(np.uint8)
                 x0, y0 = indent_x + col*tw, row*th
                 x1, y1 = x0+tw, y0+th
                 img[y0:y1, x0:x1] = tile_image
@@ -743,21 +758,22 @@ class DatasetWindow(StatusWindow):
 
     def save(self):
         filename = "font_set.json"
-        sel  = self.app.windows['results_window'].get_selection()
+        sel = self.app.windows['results_window'].get_selection()
 
         for clust_info in sel:
             clust_info['font_names'] = [self.app.data.font_names_train[i] for i in clust_info['font_inds']]
         out_data = {'char_set': self.app.char_set,
                     'clusters': sel}
-        
-        image=self._draw_chars(sel)
 
+        image = self._draw_chars(sel)
 
         with open(filename, 'w') as f:
             json.dump(out_data, f)
         img_filename = "font_chars.png"
         cv2.imwrite(img_filename, image[:, :, ::-1])
-        logging.info("Saved dataset (%i fonts, %i chars each) to %s and %s", len(sel), len(self.app.char_set), filename, img_filename)
+        logging.info("Saved dataset (%i fonts, %i chars each) to %s and %s",
+                     len(sel), len(self.app.char_set), filename, img_filename)
+
 
 class FontClusterApp(object):
     """
@@ -777,7 +793,7 @@ class FontClusterApp(object):
     """
 
     def __init__(self, size=(1600, 950)):
-        
+
         self.data = AlphaNumericMNISTData(use_good_subset=False, test_train_split=0.0)
         self.disp_font_ind = 0
         self.char_set = []
@@ -786,13 +802,13 @@ class FontClusterApp(object):
         # self._pca = PCA()
         # self._clusters = None
         self.clust_alg = None
-        self.sim_graph=None
+        self.sim_graph = None
         self.windows = {'cs_window': CharsetWindow(self, bbox_rel={'x': (.14, 1.0), 'y': (.8, 1.0)}),
-                        'ctrl_window': ControlWindow(self, bbox_rel={'x': (.01, .14), 'y': (.02, .4)}),
+                        'ctrl_window': ControlWindow(self, bbox_rel={'x': (.01, .14), 'y': (.02, .5)}),
                         'results_window': ResultsWindow(self, bbox_rel={'x': (.15, 1.0), 'y': (.02, .8)}),
-                        'status_window': StatusWindow(self, bbox_rel={'x': (.01, .14), 'y': (.41, .79)}),
+                        'status_window': StatusWindow(self, bbox_rel={'x': (.01, .14), 'y': (.51, .79)}),
                         'dataset_window': DatasetWindow(self, bbox_rel={'x': (.01, .14), 'y': (.8, 1.0)})
-                       }
+                        }
         self._bkg_color = COLORS['OFF_WHITE_RGB']
         self._draw_color = COLORS['DARK_NAVY_RGB']
         self.win_name = "Character Set"
@@ -802,9 +818,9 @@ class FontClusterApp(object):
         self.x_train = None
 
     def vec_to_tile(self, vec):
-        
-        tile = vec.reshape((28,28,1)) 
-        tile_image = (self._draw_color * tile + self._bkg_color * (1-tile)).astype(np.uint8)    
+
+        tile = vec.reshape((28, 28, 1))
+        tile_image = (self._draw_color * tile + self._bkg_color * (1-tile)).astype(np.uint8)
         return tile_image
 
     def update_k(self, k):
@@ -817,7 +833,7 @@ class FontClusterApp(object):
 
     def update_preprocessing(self, params):
         logging.info("Preprocessing with params:\n%s", pprint.pformat(params))
-        self.x_train, self.fonts_train,self.train_vec_info = self._preprocess(params)
+        self.x_train, self.fonts_train, self.train_vec_info = self._preprocess(params)
         self.refresh_alg()
 
     def recluster(self):
@@ -826,26 +842,26 @@ class FontClusterApp(object):
         # TODO:  implement clustering
         if self.x_train is None:
             self.update_preprocessing(params)
-        self._assignments,self._distances = self._cluster(self.x_train)
-        ### DEBUG
+        self._assignments, self._distances = self._cluster(self.x_train)
+        # DEBUG
         test_lab = np.max(self._assignments)
-        test_mask = self._assignments==test_lab
+        test_mask = self._assignments == test_lab
         test_imgs = np.array(self.train_vec_info['disp_icons'])[test_mask]
         test_img = make_digit_mosaic(test_imgs, 1.0, bkg=0)
-        print("Test cluster (%i) has %i fonts, showing %i."%(test_lab, test_mask.sum(), len(test_imgs)))
-        cv2.imshow("Test", test_img[:,:,::-1])
+        print("Test cluster (%i) has %i fonts, showing %i." % (test_lab, test_mask.sum(), len(test_imgs)))
+        cv2.imshow("Test", test_img[:, :, ::-1])
         print("Test cluster fonts:", np.array(self.fonts_train)[test_mask])
-        ### END DEBUG
+        # END DEBUG
         print(len(np.unique(self._assignments)), "clusters found.")
-        self.windows['results_window'].update_results( self._assignments, self._distances,self.train_vec_info)
+        self.windows['results_window'].update_results(self._assignments, self._distances, self.train_vec_info)
 
     def update_params(self, params):
         params = self.windows['ctrl_window'].get_params()
         alg = params['alg']
-        if alg=='KMeans':
+        if alg == 'KMeans':
             if params['k_slider'] != self.clust_alg.k or params['dist_metric_name'] != self.clust_alg.which:
                 self.refresh_alg()
-        elif alg=='Spectral':
+        elif alg == 'Spectral':
             sim_graph_name = 'KNN'
             if not isinstance(self._sim_graph, SIM_GRAPHS[sim_graph_name]['type']):
                 raise Exception("This shouldn't be called for alg changes.")
@@ -859,23 +875,23 @@ class FontClusterApp(object):
         knn_k = params['knn_k']
         knn_mutual = params['knn_mutual_toggle']
         distance_metric = params['dist_metric_name']
-        dist_metric = [k for k in DISTANCE_LABELS.keys() if DISTANCE_LABELS[k]==distance_metric][0]
+        dist_metric = [k for k in DISTANCE_LABELS.keys() if DISTANCE_LABELS[k] == distance_metric][0]
         sim_graph_params = {'k': knn_k, 'mutual': knn_mutual, 'distance_metric': dist_metric}
         return sim_graph_params
-        
+
     def refresh_alg(self):
         params = self.windows['ctrl_window'].get_params()
         alg = params['alg']
-        k = params['k_slider']      
+        k = params['k_slider']
         dist_metric_name = params['dist_metric_name']
-        #reverse-lookup to get the metric:
+        # reverse-lookup to get the metric:
         try:
-            dist_metric = [k for k in DISTANCE_LABELS.keys() if DISTANCE_LABELS[k]==dist_metric_name][0]
+            dist_metric = [k for k in DISTANCE_LABELS.keys() if DISTANCE_LABELS[k] == dist_metric_name][0]
         except:
             raise ValueError("Unknown distance metric name: %s" % dist_metric_name)
 
         if alg == 'KMeans':
-            self.clust_alg = KMeansAlgorithm(k=k, distance_metric=dist_metric,n_init=1, max_iter=1000)
+            self.clust_alg = KMeansAlgorithm(k=k, distance_metric=dist_metric, n_init=1, max_iter=1000)
             self._sim_graph = None
             self.stats_artist = self.clust_alg
 
@@ -886,6 +902,21 @@ class FontClusterApp(object):
             self._sim_graph = SIM_GRAPHS[sim_graph_name]['type'](**sim_graph_params)
             self.clust_alg = SpectralAlgorithm(k=k)
             self.stats_artist = self._sim_graph
+        elif alg == 'DBScan-auto':
+            min_samples = params['dbscan_min_size']
+            self.clust_alg = DBScanAlgorithm(k=k,
+                                             min_nn_samples=min_samples,
+                                             metric=dist_metric)
+            self._sim_graph = None
+            self.stats_artist = self.clust_alg
+        elif alg == 'DBScan':
+            eps = params['dbscan_eps']
+            min_samples = params['dbscan_min_size']
+            self.clust_alg = DBScanManualAlgorithm(epsilon_rel=eps,
+                                                   min_nn_samples=min_samples,
+                                                   metric=dist_metric)
+            self._sim_graph = None
+            self.stats_artist = self.clust_alg
         else:
             raise ValueError("Unknown algorithm name: %s" % alg)
 
@@ -893,27 +924,28 @@ class FontClusterApp(object):
         if self._sim_graph is not None:
             self._sim_graph.fit(x_train)  # already update in update_params
             img = self._sim_graph.make_img()
-            #cv2.imshow("Similarity Graph", img)
-            #cv2.waitKey(0)
+            # cv2.imshow("Similarity Graph", img)
+            # cv2.waitKey(0)
             # print(self._sim_graph._get_graph_stats())
-            data = self._sim_graph 
+            data = self._sim_graph
         else:
             data = x_train
-        self.clust_alg.fit(data,verbose=True)
+        self.clust_alg.fit(data, verbose=True)
         assignments, distances = self.clust_alg.assign(self.x_train)
 
         return assignments, distances
-    
+
     def _make_img(self, train_vecs):
         width = 28 * len(self.char_set)
         height = 28 * len(train_vecs['font_names'])
         img = np.zeros((height, width), dtype=np.uint8)
         img[:] = 255
-        
+
         for f_ind, font in enumerate(train_vecs['font_names']):
             for c_ind, char in enumerate(self.char_set):
-                data_ind = c_ind*28 *28
-                img[f_ind * 28:(f_ind + 1) * 28, c_ind * 28:(c_ind + 1) * 28] = (train_vecs['font_data'][f_ind][data_ind:data_ind+28*28].reshape((28, 28)) * 255).astype(np.uint8)
+                data_ind = c_ind*28 * 28
+                img[f_ind * 28:(f_ind + 1) * 28, c_ind * 28:(c_ind + 1) * 28] = (train_vecs['font_data']
+                                                                                 [f_ind][data_ind:data_ind+28*28].reshape((28, 28)) * 255).astype(np.uint8)
         return img
 
     def _preprocess(self, params):
@@ -949,15 +981,14 @@ class FontClusterApp(object):
                 train_vecs['font_names'].append(font)
                 train_vecs['font_data'].append(font_data.flatten())
 
-        test_img =self._make_img(train_vecs)
+        test_img = self._make_img(train_vecs)
         cv2.imwrite("test_vecs.png", test_img)
         logging.info("Wrote test vector image with %i samples to 'test_vecs.png'", len(train_vecs['font_names']))
 
         logging.info("After subsetting, %i fonts have all %i chars.", len(train_vecs['font_names']), len(self.char_set))
-        
+
         x_train = np.array([fdata.flatten() for fdata in train_vecs['font_data']])
         fonts_train = np.array(train_vecs['font_names'])
-
 
         logging.info("\tX-train shape: %s", x_train.shape)
         logging.info("\tFonts shape: %s", fonts_train.shape)
@@ -974,7 +1005,7 @@ class FontClusterApp(object):
             fonts_train = self.fonts_train
         else:
             raise ValueError("pca_dims must be >= 0, <= 784")
-            
+
         self._last_pca_dims = pca_dims
         return x_train, fonts_train, train_vecs
 

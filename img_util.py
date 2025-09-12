@@ -232,8 +232,7 @@ def make_assign_gallery(size, tiles, distances, assignments, n_max=200, pad_px=1
                                                                pad_px=pad_px,
                                                                mosaic_aspect=aspect,
                                                                bkg_color=bgk_color,
-                                                               init_size=size,
-                                                               aspect=aspect)
+                                                               init_size=size)
 
     return img, cluster_bboxes, labels
 
