@@ -140,7 +140,7 @@ class ControlWindow(ClusterWindow):
             'knn_k': Slider(self._simgraph_param_split_bbox, label='KNN K', callback=self._param_change, default=5, range=self._PARAM_RANGES['knn_k'], format_str=int_fmt_str),
             'knn_mutual_toggle': ToggleButton(self._simgraph_toggle_bbox, label='Mutual', callback=self._param_change),
             'dbscan_min_size': Slider(self._db_scan_min_size_bbox, label='Min Size', callback=self._param_change, default=5, range=(1, 20), format_str=int_fmt_str),
-            'dbscan_eps': Slider(self._db_scan_eps_bbox, label='Epsilon', callback=self._param_change, default=0.05, range=(0.0, 1.0), format_str=": %.1f"),
+            'dbscan_eps': Slider(self._db_scan_eps_bbox, label='Epsilon', callback=self._param_change, default=0.05, range=(0.0, 1.0), format_str=": %.2f"),
             'dist_metric_toggle': ToggleButton(self._dist_metric_toggle_bbox,
                                                label=DISTANCE_LABELS['euclidean'],
                                                alt_label=DISTANCE_LABELS['cosine'],
@@ -858,13 +858,13 @@ class FontClusterApp(object):
         self._assignments, self._distances = self._cluster(self.x_train)
         print("-------------------------> ",self._assignments.min(), self._assignments.max())
         # DEBUG
-        test_lab = np.max(self._assignments)-1
-        test_mask = self._assignments == test_lab
-        test_imgs = np.array(self.train_vec_info['disp_icons'])[test_mask]
-        test_img = make_digit_mosaic(test_imgs, 1.0, bkg=0)
-        print("Test cluster (%i) has %i fonts, showing %i." % (test_lab, test_mask.sum(), len(test_imgs)))
-        cv2.imshow("Test", test_img[:, :, ::-1])
-        print("Test cluster fonts:", np.array(self.fonts_train)[test_mask])
+        # test_lab = np.max(self._assignments)-1
+        # test_mask = self._assignments == test_lab
+        # test_imgs = np.array(self.train_vec_info['disp_icons'])[test_mask]
+        # test_img = make_digit_mosaic(test_imgs, 1.0, bkg=0)
+        # print("Test cluster (%i) has %i fonts, showing %i." % (test_lab, test_mask.sum(), len(test_imgs)))
+        # cv2.imshow("Test", test_img[:, :, ::-1])
+        # print("Test cluster fonts:", np.array(self.fonts_train)[test_mask])
         # END DEBUG
         logging.info("\tComplete, found %i clusters.", len(np.unique(self._assignments)))
         #import ipdb; ipdb.set_trace()

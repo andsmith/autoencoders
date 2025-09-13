@@ -28,7 +28,7 @@ def bbox_contains(bbox, x, y):
 
 def calc_font_size(lines, bbox, font, indent, incl_baseline=False):
     w, h = bbox['x'][1] - bbox['x'][0], bbox['y'][1] - bbox['y'][0]
-    size, pos_xy, thickness = get_font_size(lines[0], (w, h), font=font, pad=indent)
+    size, pos_xy, thickness = get_font_size(lines[0], (w, h), font=font, pad=indent, incl_baseline=incl_baseline)
     (width, height), baseline = cv2.getTextSize(lines[0], font, size, thickness)
     return size, (height if not incl_baseline else height + baseline)
 
@@ -215,9 +215,9 @@ class Slider(Tool):
 
         self._font_size, _ = calc_font_size([test_str], self._text_bbox, self._font, 0, incl_baseline=True)
         title_dims, baseline = cv2.getTextSize(test_str, self._font, self._font_size, 1)
-        left = self._bbox['x'][0] + self._spacing_px
-        top = self._bbox['y'][0] + title_dims[1] + self._spacing_px + baseline
-        self._title_pos = (left, top)
+        left = self._text_bbox['x'][0] + self._spacing_px
+        base_y = self._text_bbox['y'][1] - baseline
+        self._title_pos = (left, base_y)
         # slider dims
         self._s_left = left
         self._s_right = self._bbox['x'][1] - self._spacing_px
@@ -267,14 +267,13 @@ class Slider(Tool):
             p0 = (bbox['x'][0], bbox['y'][0])
             p1 = (bbox['x'][1], bbox['y'][1])
             cv2.rectangle(img, p0, p1, COLORS[color_name], 1)
-        # _draw_bbox(self._bbox, 'red')
-        # _draw_bbox(self._text_bbox, 'green')
-        # _draw_bbox(self._slider_bbox, 'blue')
+        # _draw_bbox(self._bbox, 'NEON_RED')
+        # _draw_bbox(self._text_bbox, 'NEON_GREEN')
+        # _draw_bbox(self._slider_bbox, 'NEON_BLUE')
 
         # title
         val = self.get_value()
         slider_str = self._txt_name + self._format_str % (val,)
-
         cv2.putText(img, slider_str, self._title_pos, self._font, self._font_size, self._colors['idle'], 1, cv2.LINE_AA)
         # slider bar
         if self._orient == 'horizontal':
