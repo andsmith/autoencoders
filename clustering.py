@@ -2,6 +2,7 @@ import numpy as np
 from shapely import points
 from sklearn.cluster import KMeans, DBSCAN
 from sklearn.metrics import pairwise_distances
+from scipy.spatial.distance import pdist, squareform
 from abc import ABC, abstractmethod
 from util import get_good_point_size, write_lines
 import logging
@@ -226,20 +227,29 @@ class KMeansAlgorithm(ClusteringAlgorithm):
 
 class DBScanAlgorithm(ClusteringAlgorithm):
 
-    def __init__(self, k, min_nn_samples=3, metric='euclidean', maxiter=50):
+    def __init__(self, min_nn_samples=3, metric='euclidean', maxiter=50):
         """
+        Find epsilon that achieves highest number of clusters.
+
+        Assign outliers to the last cluster.
+
+        :param metric: distance metric, 'euclidean' or 'cosine'
         :param min_samples: minimum samples in a cluster
         """
-        super().__init__(k=k)
+        super().__init__(k=-1)
         self.min_samples = min_nn_samples
         self.metric = metric
         if metric not in ['euclidean', 'cosine']:
             raise ValueError("metric must be 'euclidean' or 'cosine'")
         self._dbscan = None
-        self.labels_ = None
         self.epsilon_ = None
         self.maxiter = maxiter
-        self._n_clust = {}
+        self._n_clust = {}  # map from epsilon to number of clusters found
+        
+        self.labels_ = None
+        self.iterations_ = 0
+        self.epsilon_ = None
+        self.epsilon_rel = None
 
     def _get_eps_range(self, x):
         dists = pairwise_distances(x, metric=self.metric)
@@ -250,44 +260,64 @@ class DBScanAlgorithm(ClusteringAlgorithm):
 
     def fit(self, x, verbose=False):
         """
-        Binary search on epsilon until we get k clusters.
+        Ternary search on epsilon until we get the most clusters.
         """
-        self._eps_high, self._eps_low = self._get_eps_range(x)
+        self._eps_low, self._eps_high = self._get_eps_range(x)
         if verbose:
-            logging.info("DBScan(MinSample=%i) - binary search for %i clusters, eps range: [%.4f, %.4f]",
-                         self.min_samples, self.k, self._eps_low, self._eps_high)
+            logging.info("DBScan(MinSample=%i) - ternary search for max clusters, eps range: [%.4f, %.4f]",
+                         self.min_samples, self._eps_low, self._eps_high)
+            logging.info("\tsampling range...")
         self._n_clust = {}
         epsilon = (self._eps_high + self._eps_low) / 2
 
         def _test(eps):
             model = DBSCAN(eps=eps, min_samples=self.min_samples, metric=self.metric)
             labels = model.fit_predict(x)
-            n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+            n_clusters = len(set(labels)) 
             self._n_clust[eps] = n_clusters
             return n_clusters
 
         high, low = self._eps_high, self._eps_low
+        # Sample 20 values before searching
+        test_eps = np.linspace(low, high, num=20)
+        for eps in test_eps:
+            self._n_clust[eps] = _test(eps)
 
-        self._n_clust[high] = _test(high)
-        self._n_clust[low] = _test(low)
-        for iteration in range(self.maxiter):
-            n_clusters = _test(epsilon)
-            if verbose:
-                logging.info("\titeration %i, eps=%.4f, clusters=%i", iteration, epsilon, n_clusters)
-            if n_clusters == self.k:
-                if verbose:
-                    logging.info("Found %i clusters with eps=%.4f", n_clusters, epsilon)
-                break
-            if n_clusters < self.k:
-                low = epsilon
+        iteration=0
+        best_epsilon = None
+        max_clusters = -1
+        if verbose:
+            logging.info("\tstarting ternary search...")
+        while (high - low >= 1e-3) and (iteration < self.maxiter):
+            mid1 = low + (high - low) / 3
+            mid2 = high - (high - low) / 3
+            n1 = _test(mid1)
+            n2 = _test(mid2)
+            self._n_clust[mid1] = n1
+            self._n_clust[mid2] = n2
+            if n1 < n2:
+                low = mid1
+                if n2 >= max_clusters:
+                    max_clusters = n2
+                    best_epsilon = mid2
             else:
-                high = epsilon
-            epsilon = (high + low) / 2
-            if abs(high - low) < 1e-4:
-                if verbose:
-                    logging.info("Epsilon search converged at eps=%.4f with %i clusters", epsilon, n_clusters)
-                break
-        self.iterations_ = iteration + 1
+                high = mid2
+                if n1 >= max_clusters:
+                    max_clusters = n1
+                    best_epsilon = mid1
+            iteration += 1
+            if verbose:
+                logging.info("\tternary iter %i: eps range [%.4f, %.4f], mid1=%.4f (%i clusters), mid2=%.4f (%i clusters)",
+                             iteration, low, high, mid1, n1, mid2, n2)
+        epsilon = best_epsilon if best_epsilon is not None else (self._eps_high + self._eps_low) / 2
+        self.epsilon_rel = (epsilon - self._eps_low) / (self._eps_high - self._eps_low)
+        self.epsilon_ = epsilon
+        self.iterations_ = iteration
+        self._fit = True
+        if verbose:
+            logging.info("DBScan ternary search done in %i iterations, using eps=%.4f with %i clusters.",
+                         iteration, epsilon, max_clusters)
+            
         return self._fit_eps(x, epsilon, verbose=verbose)
 
     def _fit_eps(self, x, epsilon, verbose=False):
@@ -296,29 +326,43 @@ class DBScanAlgorithm(ClusteringAlgorithm):
         if verbose:
             logging.info("Fitting DBScan with min_samples=%i, n_samples=%i, dim=%i",
                          self.min_samples, x.shape[0], x.shape[1])
-        # Compute smallest, largest pariwise distances
         if verbose:
             logging.info("\tusing eps=%.4f", epsilon)
         self._dbscan = DBSCAN(eps=epsilon, min_samples=self.min_samples, metric=self.metric)
         self.labels_ = self._dbscan.fit_predict(x)
-         # Move outliers to a new cluster
-        n_clusters = np.max(self.labels_) + 1  # clusters are 0..n-1
-        n_noise = np.sum(self.labels_ == -1)
+
+        n_clusters = len(set(self.labels_[self.labels_ != -1]))  
+        n_outliers = np.sum(self.labels_ == -1)
+
+        if verbose:
+            logging.info("\tDBScan found %i clusters, %i outliers", n_clusters, n_outliers)
+
+
+        # Move outliers to a new cluster if there are any
         outlier_mask = self.labels_ == -1
-        if np.sum(outlier_mask)>0:
-            self.labels_[outlier_mask] = n_clusters + 1
+
+        if n_outliers > 0:
+            if verbose: 
+                logging.info("\tfound %i outliers, assinging to cluster %i.", n_outliers, n_clusters + 1)
+            self.labels_[outlier_mask] = n_clusters 
             n_clusters += 1
 
         if verbose:
-            logging.info("DBScan found %i clusters and %i noise points.", n_clusters, n_noise)
+            logging.info("DBScan classified %i points into %i clusters, sized: ", 
+                         len(self.labels_), n_clusters)
+            unique, counts = np.unique(self.labels_, return_counts=True)
+            tot=0
+            for u, c in zip(unique, counts):
+                logging.info("\tcluster %i: %i points", u, c)
+                tot+=c
+            logging.info("\ttotal: %i points", tot)
+
         self.k = n_clusters
-        self.epsilon_ = epsilon
-        self._fit = True
 
         self._core_samples = self._get_core_samples(self._dbscan, x)
         return self.labels_
     
-    def _get_core_samples(self, dbscan,data):
+    def _get_core_samples(self, dbscan,data, n_max=30):
         """
         We'll use distance to nearest core sample as our "cluster distance" metric.
         :param dbscan: the fitted DBSCAN model
@@ -328,7 +372,12 @@ class DBScanAlgorithm(ClusteringAlgorithm):
         core_samples = []
         for cluster_id in range(self.k-1):  # won't include outliers, who have no core samples
             inds = core_inds[dbscan.labels_[core_inds] == cluster_id]
-            core_samples.append(data[inds])
+            core_samps = data[inds]
+            if len(core_samps) > n_max:
+                # randomly sample
+                rand_inds = np.random.choice(len(core_samps), n_max, replace=False)
+                core_samps = core_samps[rand_inds]
+            core_samples.append(core_samps.reshape(-1, data.shape[1]))
         return core_samples
     
     def _get_distance(self, x, labels):
@@ -339,19 +388,19 @@ class DBScanAlgorithm(ClusteringAlgorithm):
         """
         print("Max labels:", np.max(labels))
         print("Num core samples:", len(self._core_samples))
+
         distances = np.full(x.shape[0], np.inf)
-        for i in range(x.shape[0]):
-            cluster_id = labels[i]
-            if cluster_id == -1:
-                continue
-            core_samples = self._core_samples[cluster_id]
-            if self.metric == 'euclidean':
-                dists = np.linalg.norm(core_samples - x[i], axis=1)
-            elif self.metric == 'cosine':
-                x_norm = x[i] / np.linalg.norm(x[i])
-                core_samples_norm = core_samples / np.linalg.norm(core_samples, axis=1, keepdims=True)
-                dists = 1 - np.dot(core_samples_norm, x_norm)
-            distances[i] = np.min(dists)
+        logging.info("Calculating distances to core samples for %i points...", x.shape[0])
+        labs = np.unique(labels)
+        for lab in labs:
+            print("Processing label:", lab)
+            sample_mask = labels == lab
+            samples = x[sample_mask].reshape(-1, x.shape[1])
+            core_samps = self._core_samples[lab]
+            dists = pairwise_distances(samples, core_samps, metric=self.metric)
+            min_dists = np.min(dists, axis=1)
+            distances[sample_mask] = min_dists
+
         return distances
 
     def assign(self, x):
@@ -360,11 +409,12 @@ class DBScanAlgorithm(ClusteringAlgorithm):
         if self._dbscan is None:
             raise ValueError("Model has not been fit yet.")
         labels = self._dbscan.fit_predict(x)
-        distances_inliers = self._get_distance(x, labels[labels>=-1])
+        distances_inliers = self._get_distance(x[labels>-1], labels[labels>-1])
         distances_outliers = np.zeros(np.sum(labels==-1)) 
         distances = np.full(x.shape[0], np.inf)
-        distances[labels>=-1] = distances_inliers   
+        distances[labels>-1] = distances_inliers   
         distances[labels==-1] = distances_outliers
+        labels[labels==-1] = self.k - 1
         return labels, distances
 
     def draw_stats(self, image, bbox, color):
@@ -375,7 +425,7 @@ class DBScanAlgorithm(ClusteringAlgorithm):
         in the lower:
            - print txt_stats
         """
-        bbox_upper, bbox_lower = split_bbox(bbox, 0.5)
+        bbox_upper, bbox_lower = split_bbox(bbox, 0.5,orient='h')
         self._draw_eps_plot(image, bbox_upper, color)
         self._draw_txt_stats(image, bbox_lower, color)
 
@@ -388,7 +438,7 @@ class DBScanAlgorithm(ClusteringAlgorithm):
         n_clusters = np.array([self._n_clust[eps] for eps in epsilons])
         size_wh = (bbox['x'][1] - bbox['x'][0], bbox['y'][1] - bbox['y'][0])
         img = tiny_plot(size_wh, x=epsilons, y=n_clusters,
-                  xlabel="epsilon", ylabel="n clusters", color=color)
+                  x_label="epsilon", y_label="n clusters",adjust_params={'left':.3,'bottom':.35})
         image[bbox['y'][0]:bbox['y'][1], bbox['x'][0]:bbox['x'][1]] = img
 
     def _get_stat_lines(self):
@@ -396,6 +446,7 @@ class DBScanAlgorithm(ClusteringAlgorithm):
         n_noise = np.sum(self.labels_ == -1)
         lines = [f"DBScan: min_samples={self.min_samples}",
                  f"eps={self.epsilon_:.4f}",
+                 f"eps_rel={self.epsilon_rel:.2f}",
                  f"n clusters={n_clusters}",
                  f"n noise pts={n_noise}",
                  f"n iters={self.iterations_}"]
@@ -412,7 +463,7 @@ class DBScanManualAlgorithm(DBScanAlgorithm):
         :param k: expected number of clusters
         :param min_samples: minimum samples in a cluster
         """
-        super().__init__(k=-1, min_nn_samples=min_nn_samples, metric=metric)
+        super().__init__(min_nn_samples=min_nn_samples, metric=metric)
         self.epsilon_rel = epsilon_rel
 
     def fit(self, x, verbose=False):

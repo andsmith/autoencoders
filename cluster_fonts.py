@@ -246,7 +246,7 @@ class ControlWindow(ClusterWindow):
             self.widgets['knn_mutual_toggle'].set_visible(False)
             self.widgets['dbscan_min_size'].set_visible(True)
             self.widgets['dbscan_eps'].set_visible(False)
-            self.widgets['k_slider'].set_visible(True)  
+            self.widgets['k_slider'].set_visible(False)  
 
         elif alg_name == 'DBScan':
             self.widgets['knn_k'].set_visible(False)
@@ -459,7 +459,7 @@ class CharsetWindow(ClusterWindow):
 
         for button in self._buttons.values():
             if _check_button(button['bbox']):
-                logging.info("Mouse over button: %s", button['text'])
+                #logging.info("Mouse over button: %s", button['text'])
                 button['mouseover'] = True
                 new_mouse_over_text = button['text']
             else:
@@ -468,7 +468,7 @@ class CharsetWindow(ClusterWindow):
         if new_mouse_over_text is None:
             for char_button in self._char_buttons.values():
                 if _check_button(char_button['bbox']):
-                    logging.info("Mouse over char button: %s", char_button['text'])
+                    #logging.info("Mouse over char button: %s", char_button['text'])
                     char_button['mouseover'] = True
                     new_mouse_over_text = char_button['text']
                 else:
@@ -524,16 +524,16 @@ class ResultsWindow(ClusterWindow):
 
     def update_results(self, assignments, distances, train_vec_info):
         print("_---------results window: update_results()")
+        
         self._labels = np.unique(assignments)
         self._assignments = assignments
         self._distances = distances
         self._train_vec_info = train_vec_info
         self._clusters = [{'bbox': None, 'label': lab, 'is_selected': False, 'image': None} for lab in self._labels]
         self._fractions = np.zeros(len(self._labels))  # how much of each cluster to select
-        import ipdb
-        ipdb.set_trace()    
         if self._bbox is not None or self._bboxes is None:
             self.redraw()
+
 
     def get_selection(self):
         """
@@ -547,8 +547,9 @@ class ResultsWindow(ClusterWindow):
         selection = []
         if self._assignments is None:
             return selection
-
+        #import ipdb; ipdb.set_trace()
         for ind, cluster in enumerate(self._clusters):
+            # if ind==len(self._clusters)-1:
             label = self._cluster_labels[ind]
             if cluster['is_selected']:
 
@@ -558,11 +559,14 @@ class ResultsWindow(ClusterWindow):
                 font_names = [self._train_vec_info['font_names'][i] for i in font_inds]
                 if frac < 1.0:
                     sorted_inds = np.argsort(font_dists)[::-1]
+                    if len(sorted_inds) == 0:
+                        continue
                     n_select = max(1, int(len(sorted_inds) * frac))
                     font_inds = [font_inds[i] for i in sorted_inds[:n_select]]
                     font_dists = [font_dists[i] for i in sorted_inds[:n_select]]
                     font_names = [font_names[i] for i in sorted_inds[:n_select]]
                     # Adjust the fraction to account for the selected fonts
+                    
                     frac = n_select / len(sorted_inds)
                 selection.append({'font_inds': font_inds,
                                   'font_dists': font_dists,
@@ -606,28 +610,34 @@ class ResultsWindow(ClusterWindow):
     def on_mouse(self, event, x, y, flags, param):
         x, y = self.translate(x, y)
         y_scale = 150  # pixels per 100 %
-
+        changed=False
         self._update_mouseover(x, y)
         if event == cv2.EVENT_LBUTTONDOWN and self._mouseover_ind is not None:
             self._click_xy = (x, y)
             self._held_ind = self._mouseover_ind
-            self._clusters[self._held_ind]['is_selected'] = not self._clusters[self._held_ind]['is_selected']
+            self._clusters[self._held_ind]['is_selected'] = True  # not self._clusters[self._held_ind]['is_selected']
+            changed=True
+            self._fractions[self._held_ind] = 0.5
+            logging.info("Selecting cluster %i, setting fraction to %.2f", self._cluster_labels[self._held_ind], self._fractions[self._held_ind])
         elif event == cv2.EVENT_MOUSEMOVE and self._held_ind is not None and self._click_xy is not None:
             dy = (self._click_xy[1] - y) / y_scale
             frac = np.clip(dy, 0, 1)
             self._fractions[self._held_ind] = frac
             logging.info("Setting cluster %i fraction to %.2f", self._cluster_labels[self._held_ind], frac)
+            changed=True
 
         elif event == cv2.EVENT_LBUTTONUP:
             if self._held_ind is not None:
                 if self._fractions[self._held_ind] == 0:
                     self._clusters[self._held_ind]['is_selected'] = False
                     logging.info("Un-selecting cluster %i", self._held_ind)
+                    changed=True
             self._held_ind = None
             self._click_xy = None
+        if changed:
+            self.app.windows['dataset_window'].update_dataset()
 
     def resize(self, size):
-        print("__----------------ResultsWindow: resize to", size)
         left, right = int(self._bbox_rel['x'][0] * size[0]), int(self._bbox_rel['x'][1] * size[0])
         top, bottom = int(self._bbox_rel['y'][0] * size[1]), int(self._bbox_rel['y'][1] * size[1])
         width, height = right - left, bottom - top
@@ -652,7 +662,7 @@ class ResultsWindow(ClusterWindow):
                     color = COLORS['NEON_GREEN']
                 if cluster['is_selected'] or (self._held_ind is not None and ind == self._held_ind):
                     color = COLORS['DARK_RED_RGB'] if (
-                        self._held_ind is not None and ind == self._held_ind) else COLORS['SKY_BLUE']
+                        self._held_ind is not None and ind == self._held_ind) else COLORS['NEON_BLUE']
                     frac_pct_str = f"{int(self._fractions[ind]*100)}%"
                     text_x = bbox['x'][0] + 5
                     size = .5
@@ -705,16 +715,23 @@ class DatasetWindow(StatusWindow):
         - n_train_samples with all characters.
 
     """
+    def __init__(self, app, bbox_rel=None):
+        super().__init__(app, bbox_rel)
+        self._selection = None
+    
+    def update_dataset(self):
+        self._selection = self.app.windows['results_window'].get_selection()
+        total_fonts = sum([len(s['font_inds']) for s in self._selection]) if self._selection is not None else 0
+        logging.info("DatasetWindow: %i clusters selected, %i fonts total.", len(self._selection) if self._selection is not None else 0, total_fonts)
 
     def _draw(self, image):
-
-        sel = self.app.windows['results_window'].get_selection()
-        if sel is not None:
-            lines = ['n clust: %i' % len(sel),
-                     'n fonts: %i' % sum([len(s['font_inds']) for s in sel]),
-                     'DS-S size: %i' % (sum([len(s['font_inds']) for s in sel]) * len(self.app.char_set)),
-                     'DS-G size: %i' % (sum([len(s['font_inds']) for s in sel]) * len(GOOD_CHAR_SET)),
-                     'DS-A size: %i' % (sum([len(s['font_inds']) for s in sel]) * 94)]
+        
+        if self._selection is not None:
+            lines = ['n clust: %i' % len(self._selection),
+                     'n fonts: %i' % sum([len(s['font_inds']) for s in self._selection]),
+                     'DS-S size: %i' % (sum([len(s['font_inds']) for s in self._selection]) * len(self.app.char_set)),
+                     'DS-G size: %i' % (sum([len(s['font_inds']) for s in self._selection]) * len(GOOD_CHAR_SET)),
+                     'DS-A size: %i' % (sum([len(s['font_inds']) for s in self._selection]) * 94)]
             # print font names in the last cluster (highest label)
             # if len(sel)>0:
             #     print("Font names in last cluster (%i):"%len(sel[-1]['font_names']))
@@ -737,15 +754,13 @@ class DatasetWindow(StatusWindow):
         indent_x = 0
         img = np.ones((n_rows*th, n_cols*tw+indent_x, 3), dtype=np.uint8)*255
         img[:, :] = self._bkg_color
-
-        font_names = [self.app.data.font_names_train[i] for s in selection for i in s['font_inds']]
+        font_names = [fn for cluster_info in selection for fn in cluster_info['font_names']]
+        logging.info("Drawing %i fonts with up to %i chars each." % (len(font_names), len(chars)))
         for row, font_name in enumerate(font_names):
             char_mask = self.app.data.font_names_train == font_name
             x_train = self.app.data.x_train[char_mask]
             y_train = self.app.data.labels_train[char_mask]
-            print("Drawing row %i: %s (%i chars)" % (row, font_name, len(y_train)))
             for col in range(n_cols):
-                print("\tchar %i: %s" % (col, chars[col]))
                 ind = np.where(y_train == chars[col])[0]
                 if len(ind) == 0:
                     continue
@@ -759,9 +774,6 @@ class DatasetWindow(StatusWindow):
     def save(self):
         filename = "font_set.json"
         sel = self.app.windows['results_window'].get_selection()
-
-        for clust_info in sel:
-            clust_info['font_names'] = [self.app.data.font_names_train[i] for i in clust_info['font_inds']]
         out_data = {'char_set': self.app.char_set,
                     'clusters': sel}
 
@@ -832,19 +844,21 @@ class FontClusterApp(object):
         self._last_pca_dims = -1
 
     def update_preprocessing(self, params):
-        logging.info("Preprocessing with params:\n%s", pprint.pformat(params))
+        logging.info("Preprocessing...") # with params:\n%s", pprint.pformat(params))
         self.x_train, self.fonts_train, self.train_vec_info = self._preprocess(params)
         self.refresh_alg()
 
     def recluster(self):
+        self.refresh_alg()
         params = self.windows['ctrl_window'].get_params()
-        logging.info("Clustering with params:\n%s", pprint.pformat(params))
+        #logging.info("Clustering with params:\n%s", pprint.pformat(params))
         # TODO:  implement clustering
         if self.x_train is None:
             self.update_preprocessing(params)
         self._assignments, self._distances = self._cluster(self.x_train)
+        print("-------------------------> ",self._assignments.min(), self._assignments.max())
         # DEBUG
-        test_lab = np.max(self._assignments)
+        test_lab = np.max(self._assignments)-1
         test_mask = self._assignments == test_lab
         test_imgs = np.array(self.train_vec_info['disp_icons'])[test_mask]
         test_img = make_digit_mosaic(test_imgs, 1.0, bkg=0)
@@ -852,8 +866,10 @@ class FontClusterApp(object):
         cv2.imshow("Test", test_img[:, :, ::-1])
         print("Test cluster fonts:", np.array(self.fonts_train)[test_mask])
         # END DEBUG
-        print(len(np.unique(self._assignments)), "clusters found.")
+        logging.info("\tComplete, found %i clusters.", len(np.unique(self._assignments)))
+        #import ipdb; ipdb.set_trace()
         self.windows['results_window'].update_results(self._assignments, self._distances, self.train_vec_info)
+        self.windows['dataset_window'].update_dataset()
 
     def update_params(self, params):
         params = self.windows['ctrl_window'].get_params()
@@ -904,8 +920,7 @@ class FontClusterApp(object):
             self.stats_artist = self._sim_graph
         elif alg == 'DBScan-auto':
             min_samples = params['dbscan_min_size']
-            self.clust_alg = DBScanAlgorithm(k=k,
-                                             min_nn_samples=min_samples,
+            self.clust_alg = DBScanAlgorithm(min_nn_samples=min_samples,
                                              metric=dist_metric)
             self._sim_graph = None
             self.stats_artist = self.clust_alg
@@ -921,6 +936,7 @@ class FontClusterApp(object):
             raise ValueError("Unknown algorithm name: %s" % alg)
 
     def _cluster(self, x_train):
+        logging.info("Clustering %i samples...", x_train.shape[0])
         if self._sim_graph is not None:
             self._sim_graph.fit(x_train)  # already update in update_params
             img = self._sim_graph.make_img()
