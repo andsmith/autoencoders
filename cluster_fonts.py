@@ -145,7 +145,7 @@ class ControlWindow(ClusterWindow):
                                                label=DISTANCE_LABELS['euclidean'],
                                                alt_label=DISTANCE_LABELS['cosine'],
                                                callback=self._param_change),
-            'run': Button(self._run_bbox, label='Cluster', callback=self._run, border_indent=8),
+            'run': Button(self._run_bbox, label='Cluster', callback=self._run, border_indent=4),
             'save': Button(self._save_bbox, label='Save', callback=self.app.save_clusters, border_indent=6)
         }
         # set defaults here
@@ -294,7 +294,7 @@ class ControlWindow(ClusterWindow):
 class CharsetWindow(ClusterWindow):
     _LAYOUT = {'indent_px': 28,
                'x_div_rel': .15,
-               'char_spacing_frac': 0.1,
+               'char_spacing_frac': 0.03,
                'button_spacing_frac': 0.5,
                'bbox_color': COLORS['DARK_NAVY_RGB'],
                'text_color': COLORS['DARK_NAVY_RGB'],
@@ -778,6 +778,7 @@ class DatasetWindow(StatusWindow):
                     'clusters': sel}
 
         image = self._draw_chars(sel)
+        import ipdb; ipdb.set_trace()
 
         with open(filename, 'w') as f:
             json.dump(out_data, f)
@@ -818,8 +819,8 @@ class FontClusterApp(object):
         self.windows = {'cs_window': CharsetWindow(self, bbox_rel={'x': (.14, 1.0), 'y': (.8, 1.0)}),
                         'ctrl_window': ControlWindow(self, bbox_rel={'x': (.01, .14), 'y': (.02, .5)}),
                         'results_window': ResultsWindow(self, bbox_rel={'x': (.15, 1.0), 'y': (.02, .8)}),
-                        'status_window': StatusWindow(self, bbox_rel={'x': (.01, .14), 'y': (.51, .79)}),
-                        'dataset_window': DatasetWindow(self, bbox_rel={'x': (.01, .14), 'y': (.8, 1.0)})
+                        'status_window': StatusWindow(self, bbox_rel={'x': (.01, .14), 'y': (.51, .864)}),
+                        'dataset_window': DatasetWindow(self, bbox_rel={'x': (.01, .14), 'y': (.865, 1.0)})
                         }
         self._bkg_color = COLORS['OFF_WHITE_RGB']
         self._draw_color = COLORS['DARK_NAVY_RGB']

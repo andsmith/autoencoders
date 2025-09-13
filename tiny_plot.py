@@ -45,6 +45,9 @@ def tiny_plot(size_px, x,y,x_label=None, y_label=None,title=None,adjust_params=N
 
     plt.close(fig)  # Close the figure to free memory
 
+    if img.shape[0]!= size_px[1] or img.shape[1]!= size_px[0]:
+        img = cv2.resize(img, size_px)
+
     return img[:,:,::-1]  # convert BGR to RGB
 
 

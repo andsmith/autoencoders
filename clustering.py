@@ -288,7 +288,7 @@ class DBScanAlgorithm(ClusteringAlgorithm):
         max_clusters = -1
         if verbose:
             logging.info("\tstarting ternary search...")
-        while (high - low >= 1e-3) and (iteration < self.maxiter):
+        while (high - low >= 1e-2) and (iteration < self.maxiter):
             mid1 = low + (high - low) / 3
             mid2 = high - (high - low) / 3
             n1 = _test(mid1)
@@ -444,12 +444,13 @@ class DBScanAlgorithm(ClusteringAlgorithm):
     def _get_stat_lines(self):
         n_clusters = len(set(self.labels_)) - (1 if -1 in self.labels_ else 0)
         n_noise = np.sum(self.labels_ == -1)
-        lines = [f"DBScan: min_samples={self.min_samples}",
-                 f"eps={self.epsilon_:.4f}",
-                 f"eps_rel={self.epsilon_rel:.2f}",
-                 f"n clusters={n_clusters}",
-                 f"n noise pts={n_noise}",
-                 f"n iters={self.iterations_}"]
+        lines = [f"DBScan-auto: ",
+                 f"  min_samples={self.min_samples}",
+                 f"  eps={self.epsilon_:.4f}",
+                 f"  eps_rel={self.epsilon_rel:.2f}",
+                 f"  n clusters={n_clusters}",
+                 f"  n noise pts={n_noise}",
+                 f"  n iter={self.iterations_}"]
         return lines
 
 
@@ -468,22 +469,26 @@ class DBScanManualAlgorithm(DBScanAlgorithm):
 
     def fit(self, x, verbose=False):
         dist_min, dist_max = self._get_eps_range(x)
-        epsilon = dist_min + self.epsilon_rel * (dist_max - dist_min)
+        self.epsilon_ = dist_min + self.epsilon_rel * (dist_max - dist_min)
         if verbose:
             logging.info("DBScanManual(MinSample=%i, eps_rel=%.2f) - using eps=%.4f",
-                         self.min_samples, self.epsilon_rel, epsilon)
-        labels = self._fit_eps(x, epsilon, verbose=verbose)
+                         self.min_samples, self.epsilon_rel, self.epsilon_)
+        labels = self._fit_eps(x, self.epsilon_, verbose=verbose)
         # set K to number of clusters found
         self.k = len(set(labels)) - (1 if -1 in labels else 0)
+        self._fit = True
+        return labels
+
 
     def _get_stat_lines(self):
         n_clusters = len(set(self.labels_)) - (1 if -1 in self.labels_ else 0)
         n_noise = np.sum(self.labels_ == -1)
-        lines = [f"DBScanManual: min_samples={self.min_samples}",
-                 f"eps_rel={self.epsilon_rel:.2f}",
-                 f"eps={self.epsilon_:.4f}",
-                 f"n clusters={n_clusters}",
-                 f"n noise pts={n_noise}"]
+        lines = [f"DBScanManual: ",
+                 f"  min_samples={self.min_samples}",
+                 f"  eps_rel={self.epsilon_rel:.2f}",
+                 f"  eps={self.epsilon_:.4f}",
+                 f"  n clusters={n_clusters}",
+                 f"  n noise pts={n_noise}"]
         return lines
 
 

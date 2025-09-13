@@ -1,103 +1,134 @@
-# Autoencoding MNIST digits
+# Autoencoders, Variational and Dense
 
 Explore dense and sparse encodings of digit images.
+Interpolate in the latent space, decode and visualize.
 
-## Autoencoders
+## Datasets
 
-Autoencoding is an unsupervised learning problem, training a neural network to reproduce its input as accurately as possible.  A network trained for this can be used to "encode" an input sample by storing the activations at one layer of the network, and decode that encoding by passing it through all the subsequent layers.  
+### MNIST
 
-Given networks where each layer has more representational capacity than the input input, without additional constraints, minimizing squared reconstruction error will result in a network that learns to copy the input to the output directly, achieving perfect accuracy but not *encoding* the image in any interesting way.  The encoding function is essentially the identity function.
+Dataset statistics:
+- 70,000 grayscale images of handwritten digits (0-9, 7,000 each)
+- Each image is 28x28 pixels, automatically centered/scaled
 
-Desigining an autoencoder involves considering the properties you want your code vectors to have and how to constrain your network and/or training procedure so an encoding with those properties is found.
+![/assets/mnist.png](assets/mnist.png)
+### Fashion-MNIST
+Dataset statistics:`
+- 70,000 grayscale images of 10 fashion categories, (T-shirts, trousers, pullovers, dresses, coats, sandals, shirts, sneakers, bags, and ankle boots) (7,000 each)
+- (same size / preprocessing as MNIST)
 
-### Finding dense codes for MNIST
+![/assets/fashion_mnist.png](assets/fashion_mnist.png)
 
-One constraint to prevent that copymachine is to create an "information bottleneck" in the network architecture, where at least one of the hidden layers has fewer units than the number of input dimensions.  A network this narrow cannot learn to copy its input because it isn't large enough to store a whole input sample. An autoencoder with fewer units in the code layer than input dimensions (the bottleneck) learn to create "dense" codes, vectors of floating point numbers to whose precise values the output is highly sensitive.  
+### Typography-MNIST
 
-This project creats a multilayered autoencoder to encode a 28x28 pixel grayscale image into a vector and to decode those vectors back into images.  The usual squared error loss function is minimized to find the weights:
+Dataset statistics:
+- 2,990 typefaces, each with 94 grayscale images (total 280,060 images)
+- (same size / preprocessing as MNIST)
 
-For sample vector $x$, let $E(x)=c$ be the encoding function computed by the "first half" of the network, the activation vector of the code layer when the network sees input vector $x$.  Let let $D(c) = x'$ be the decoding function, the "second half" of the network that transforms code vector $c$ back into the reconstructed image $x'$.  The loss function for training set $X$ is:
+![/assets/typography_mnist.png](assets/alpha_numeric_mnist.png)
 
-$$
-L(X) = \sum_{x\in X} (x - D(E(x)))^2
-$$
+#### Data References
 
-Run the script `> python dense.py` to train an autoencoder on MNIST digits.  Editing the file near the bottom defines the network and training process:
+Y. LeCun, C. Cortes, and C. J. C. Burges. *MNIST handwritten digit database.* link: http://yann.lecun.com/exdb/mnist/ 
 
-```
-def dense_demo():
-    de = DenseExperiment(enc_layers=(256, 64,), n_epochs=50)
-```
+Han Xiao, Kashif Rasul, Roland Vollgraf. *Fashion-MNIST: a Novel Image Dataset for Benchmarking Machine Learning Algorithms.* arXiv: https://arxiv.org/abs/1708.07747
 
-The script trains an autoencoder with 256 hidden units and 64 code units. The parameter `enc_layers` defines the encoders layer sizes and the decoder has the reverse structure.  It also plots the distribution of MSE error in the test set (1,000 samples per digit) and 39 example encoded & decoded images from 8 different regions in this distribution (centered around the 8 quantiles):
-
-![dense result](/assets/dense_64.png)
-
-This show all but the highest error samples reproduce well after being compressed from 784 pixel values to 64 activations and then decoded back to images and that the images with the lowest reproduction error are all of the digit 1.
-
-Also plotted are the "difference images", showing for each of the test digits which pixels in the reconstruction shouldn't be active (in red), and which pixels should be but aren't (shown in blue):
-
-![dense result](/assets/dense_diffs.png)
+Magre, N., & Brown, N. M. (2022). *Typography-MNIST (TMNIST): an MNIST-Style Image Dataset to Categorize Glyphs and Font-Styles.* arXiv: https://arxiv.org/abs/2202.08112 
 
 
-### Finding sparse binary codes
 
-What if we want to encode the images as sparse (mostly zero) binary vectors instead of all nonzero floating-point values?  We need the following modifications:
-* The middle (code) layer should have an activation function that is at least roughly binary.  (If not actually binary, at inference-time this can be thresholded to create the binary encoding.)
-* There can be more code bits than pixels since most of them will be zero for a given image.  This sparsity provides the constraint preventing the network from copying the input into the output with no generalizing/re-representation since the whole image can't be stored in a few bits.  
-* The loss function should reward codes with fewer 1's (more sparse).
+## Clustering Typefaces
 
-#### Binary
-To make the codes binary, the code layer units use the binary / Heaviside activation function with constant pseudoderivative for training gradients:
-* $f(x) = 0 \text{ if } x<0 \text{, else } 1$
-* $f'(x) = 1$
+Ideally there would be a wide diversity of typefaces with no particular style overly represented. However, the dataset contains many typefaces that are very similar, and some styles (e.g. sans-serif) are much more common than others.
 
-(In implementation, this is a layer with normal sigmoid units that each feed 1-to-1 into a layer of binary thresholding units with pseudoderivatives.)
-
-#### Sparse
-To encourage code sparsity, the loss function has a regularization term, the total number of active bits in the encoded input. 
-
-$$
-L(X) = \sum_{x\in X} (x - D(E(x)))^2  + \sum E(x)
-$$
-
-Also called the L1 norm.  (A parameter is implemented to control the relative importance of the two terms, but doesn't seem to matter in practice.)
-
-Run the script `> python sparse.py` to train a sparse binary autoencoder with an encoder with 512, 128, and 4096 units in its three layers, producing encodings of 4096 bits.  This plots the same figures as the dense autoencoder example and two additional plots:
-
-First, a plot of the error rates, sparsity, and sample encoded/decoded digits:
-
-![sparsity](/assets/sparse_binary_L1-reg.png)
-
-This shows the distributions of reconstruction error for the different digits in the upper left, the number of active bits per encoded image for the 10 classes of images in the lower left, and a comparison between original and reconstructed images on the right. 
-
-Also plotted is an image showing the encoding of 100 sample digits from each of the 10 digit classes. The code bits are sorted by how often they are active in the test sample in descending order from left to right, and samples from the 10 digits are grouped vertically:
-
-![sparse codes](/assets/sparse_codes_full.png)
-
-Interestingly, some of the code bits are always on (columns of all white pixels on the far left).  Since they cannot be useful in distingusing between digits, they might be eliminated with further training to reduce the regularization term of the loss function.  Also notable is that the vast majority of code bits are never used, for *any* digit.  Any contribution they could provide to reducing MSE error is offset by increasing the regularization term value.
-
-Zooming in to the interesting region shows encodings of the same digits are similar to each other, different from encodings of different digit images:
-
-![sparse codes](/assets/sparse_codes.png)
+We can use clustering to find groups of similar typefaces and select clusters to create a training set for autoencoders.
 
 
-### Misc observations about sparsity, loss fucnction and binary code units:
+Run the script `> python cluster_fonts.py` to open the typeface clustering GUI:
 
-With the `L1` and `L1-squared` loss functions on binary units (tanh + binary/Heaviside pass-through layers at the end of the encoding stage), the training process pressures the network to find code words with fewer active bits.
+![Font Clustering GUI](assets/cluster_app_full.png)
 
-With the `entropy` and `entropy-squared` loss functions (using real-valued/sigmoid units for the code layer),  
+The left column shows the control panel, the algorithm statistics, and the projected dataset size (top to bottom).
+
+The bottom shows a set of buttons to select which characters to include in the data vectors.
+
+The large center panel shows the clusters found by the selected algorithm.  Each cluster is represented by a grid of character images, using one of the characters from the data vectors.
+
+The following settings are shown in the example image:
+ * pca dims: 0 (no dimensionality reduction)
+ * algorithm: Spectral clustering
+ * number of clusters: 25
+ * similarity-graph KNN: 9
+
+### Algorithm
+
+##### Data Preparation: 
+For each of the 2,990 typefaces, create a vector by concatenating a subset of the 94 character images into a single long vector of pixel intensities.  Each 28x28 image is flattened to a vector of length 784, and concatenating 4 characters produces a vector of length 3,136, etc.
+
+![example data](assets/cluster_char_vecs.png)
+
+#### Control panel
+
+At the top of the control panel is a selectable list of available clustering algorithms.  Below it are sliders and buttons for its parameters.
+![Control panel](assets/cluster_ctrl2.png)
+
+##### Dimensionality Reduction using PCA
+if the "PCA Dims" slider is set to a value > 0, then PCA is applied to reduce the dataset to that many dimensions.  PCA can only be used if the number of dimensions is less than the number of samples (2,990).
+
+#### Character selection
+
+Click a character directly to set which characters are used, or click the "None" "All" or "Good" buttons to select a preset group of characters.  (The so-called **good characters** do not result in blurry images after being processed into the MNIST format.)
 
 
-##### File notes
+![Character selection](assets/cluster_charset_ctrl.png)
 
-* `pca.py` - unit tests / plot tests
-* `pca_digits.py` - reconstruction loss of mnist (generates figures)
-* `test_embeddings.py` plot tests
-* `embed.py` - Generate an embedding from a model's latent representation of MNIST, make a PNG of it, save it.  ALso generate figures for raw PCA(2)
-* `draw_tiles.py` - Speed tests
+NOTE:  Clustering with more than 3 characters cannot use PCA (TODO: Fix this), so it may be slow.
 
-##### References
+#### Clustering summary
 
-* ["Cyclical Annealing Schedule:  A Simple Approach to Mitigating KL Vanishing"](https://arxiv.org/pdf/1903.10145),  Hao Fu, Chunyuan Li, Xiaodong Liu, Jianfeng Gao, Asli Celikyilmaz, Lawrence Carin, 2019.
-* ["Typography-MNIST (TMNIST): an MNIST-Style Image Dataset to Categorize Glyphs and Font-Styles"](https://arxiv.org/abs/2202.08112), Nimish Magre and Nicholas Brown, 2022.
+Below the control area is a summary of results that displays after "Cluster" is clicked.
+
+![Clustering summary](assets/dbscan-auto_results.png)
+
+
+This is the example output using DBScan-auto, which does a parameter sweep over epsilon to find the most clusters with reqired minimum cluster size (5 here).  It found 36 clusters using an epsilon of 4.46 (or 0.14 relative to the total range).  The graph shows the number of clusters found as a function of epsilon.
+
+#### Clustering results / selection
+
+The main panel shows the clusters found by the selected algorithm.  Each cluster is represented by a single character from all the typefaces in that cluster, arranged in a grid. 
+
+Click a cluster and drag the mouse up/down to increase/decrase its indicated fraction.  Dragging to 0 de-selects the cluster.  The fraction indicates what portion of the typefaces in that cluster will be included in the training set.  The least prototypical typefaces are used first to create a more diverse training set.
+
+![Clustering results](assets/results_w_selections.png)
+
+
+
+This example shows eight clusters selected for inclusion in the training set (with the blue box and percentage indicated.)  Within each cluster, samples are sorted (from left to right then top to bottom) by their "distance" from the cluster center:
+  * K-means:  Euclidean/Cosine distance from the cluster centroid
+  * DBScan: Distance from the nearest core point, or 0 for the noise points
+* Spectral:  New points are assigned to the same cluster as their closest neighbor in the training set, distances are that neighbor's distance to the cluster centroid in eigenfeature space.
+
+
+#### Dataset size
+
+Below the clustering summary shows the projected dataset size, based on which clusters are selected and what fraction is indicated for each. 
+
+![Dataset size](assets/cluster_dataset.png)
+
+This example shows that, with clusters selected as above, there are 539 typefaces included, and the dataset will have:
+  * DS-S (dataset of selected chars): 2,156 images using the selected 4 characters "R, S, T, W"
+  * DS-G (dataset of good chars): 27,489 images using the "Good" character set (51 characters)
+  * DS-A (dataset of all chars): 50,666 images using all 94 characters.
+
+  When you have enough points, click the "Save" button.  This will create the file `font_set.json` that can be used as an input to auto encoder training scripts (`dense.py`, `vae.py`)  and the file `font_chars.png` showing the selected characters from all the selected typefaces.
+
+  The internal structure of `font_set.json` is:
+  ```
+  { "charset": [list of selected characters],
+    "clusters": [ {"font_names": [list of typeface names in the cluster]}]
+  }
+  ```
+
+  # Autoencoder Training
+  
+  *to be continued...*
