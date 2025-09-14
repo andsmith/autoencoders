@@ -37,11 +37,14 @@ def load_autoencoder(weights_filename):
 def get_ae_dir(weights_filename):
     # if the filename has no directory, use the part after the first underscore and before the first open-paren
     base_name = os.path.basename(weights_filename)
-    match = re.match(r"^[^\-_]+[\-_](.+?)\(", base_name)
+    prefix = base_name[:base_name.find('(')]
+    
+    # The class name is the non dash/underscore part before the first open paren
+    match = re.search(r"_([^_]+?)\(", base_name)
     class_name = match.groups(0)[0] if match else None
     class_name = class_name.replace('-TORCH', '')
     # Matches start of experiments:
     for exp_dir in AUTOENCODERS.keys():
-        if exp_dir.startswith(class_name):
+        if exp_dir.lower().startswith(class_name.lower()):
             return exp_dir
     return class_name

@@ -272,6 +272,7 @@ class EmbedTester(object):
 
         from embed import LatentRepEmbedder
         self.samples = []
+
         self.embedder = LatentRepEmbedder.from_filename(sys.argv[1])
 
         self._box_colors = {COLOR_SCHEME['a_source']: [],
