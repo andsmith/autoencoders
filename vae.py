@@ -165,7 +165,7 @@ class VAEExperiment(AutoencoderExperiment):
         pca_str = self.pca.get_short_name()
         decoder_str = "_Decoder-%s" % "-".join(map(str, self.dec_layer_desc)) if self.dec_layer_desc is not None else ""
         encoder_str = "_Encoder-%s" % "-".join(map(str, self.enc_layer_desc))
-        dataset_str = "%s%s" % (self.dataset, "-BIN" if self.binary_input else "")
+        dataset_str = "%s%s" % (self.get_dataset_name(), "-BIN" if self.binary_input else "")
         root = ("%s_VAE-TORCH(%s%s%s%s_Dlatent=%i_RegLambda=%.4f)" %
                 (dataset_str, pca_str, encoder_str, drop_str, decoder_str, self.code_size, self.reg_lambda))
         if suffix is not None:

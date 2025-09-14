@@ -268,7 +268,7 @@ def test_get_font_size():
         for box in boxes[string]:
             draw_bbox(blank_img, box, 2, color=(255, 255, 255))
             box_w, box_h = box['x'][1] - box['x'][0], box['y'][1] - box['y'][0]
-            # import ipdb; ipdb.set_trace()
+
             incl_baseline = len(string) == 1
             font_scale, pos_xy_rel, thickness = get_font_size(string, (box_w, box_h), incl_baseline=incl_baseline)
             pos_xy = (pos_xy_rel[0] + box['x'][0], pos_xy_rel[1] + box['y'][0])

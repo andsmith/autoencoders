@@ -3,7 +3,9 @@ import csv
 import os
 import io
 import numpy as np
+import re
 import pickle
+import json
 import logging
 # dataset names are these keys:
 
@@ -134,12 +136,25 @@ def load_numeric(subset=None, test_train_split=0.15, w_names=False):
     return train, test
 
 
-def load_alphanumeric(subset=None, test_train_split=0.15, w_names=False, numeric_labels=True):
+def _load_font_names(font_file):
+    with open(font_file, 'r') as f:
+        font_data = json.load(f)
+    font_names = []
+    logging.info("Loaded %i clusters from %s", len(font_data['clusters']), font_file)
+    for ind, cluster_info in enumerate(font_data['clusters']):
+        logging.info("\tcluster %i:  %i fonts" % (ind, len(cluster_info['font_names'])))
+        font_names.extend(cluster_info['font_names'])
+    return font_names
+
+
+def load_alphanumeric(subset=None, test_train_split=0.15, w_names=False, numeric_labels=True, font_file=None):
     """
     :param subset: A list of characters to include in the dataset, or None for all.
     :param test_train_split: The fraction of the dataset to use for testing.
     :param w_names:  return (x,y,font_name) for each test/train set.
     :param numeric_labels: Whether to use numeric labels (0-9) instead of character labels (A-Z).
+    :param font_file: If not None, load data from the specified json font set file (output of cluster_font.py)
+       must load to a dict with key 'font_names' containing a list of font names to include.
     :returns:  (x_train, y_train), (x_test, y_test), if w_names is false, else
        (x_train, y_train, font_name_train), (x_test, y_test, font_name_test)
     """
@@ -149,6 +164,18 @@ def load_alphanumeric(subset=None, test_train_split=0.15, w_names=False, numeric
 
     names = np.array(names)
 
+    # filter on font names if specified:
+    if font_file is not None:
+        font_names = _load_font_names(font_file)
+        mask = np.isin(names, font_names)
+        data = data[mask]
+        labels = labels[mask]
+        names = names[mask]
+        test_mask = test_mask[mask]
+
+    labels = np.array(labels)
+
+    # Filter on character subset if specified:
     if subset is not None:
         mask = np.isin(labels, subset)
         data = data[mask]
@@ -170,6 +197,10 @@ def load_alphanumeric(subset=None, test_train_split=0.15, w_names=False, numeric
 
 
 def _tl(wo_names, w_names):
+    """
+    Test load numeric or alphanumeric data with and without names, ensure they match.
+    :param wo_names:  output of load_numeric() or load_alphanumeric() with w_names=False
+    :param w_names:  output of load_numeric() or load_alphanumeric() with w"""
     (x_train, y_train), (x_test, y_test) = wo_names
     (x_traina, y_traina, names_train), (x_testa, y_testa, names_test) = w_names
 
@@ -189,6 +220,19 @@ def test_load_alphanumeric():
     wo_names = load_alphanumeric()
     w_names = load_alphanumeric(w_names=True)
     _tl(wo_names, w_names)
+
+
+def test_load_alphanumeric_with_fontfile():
+    font_file = "font_set.json"
+    wo_names = load_alphanumeric(font_file=font_file, test_train_split=0.0)
+    w_names = load_alphanumeric(w_names=True, font_file=font_file, test_train_split=0.0)
+    _tl(wo_names, w_names)
+    logging.info("Loaded alphanumeric with font file: %s", font_file)
+    n_chars = len(set(wo_names[0][1]) | set(wo_names[1][1]))
+    n_fonts = len(set(w_names[0][2]) | set(w_names[1][2]))
+    logging.info("\tcharacter classes loaded: %i", n_chars)
+    logging.info("\tfonts loaded: %i", n_fonts)
+    logging.info("\tsample images: %i", wo_names[1][0].shape[0])
 
 
 def _test(subset, which, print_names=False):
@@ -231,8 +275,9 @@ def test_capital_letters():
 # Example Usage:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    test_load_numeric()
-    test_load_alphanumeric()
-    test_digits()
-    test_capital_letters()
+    # test_load_numeric()
+    # test_load_alphanumeric()
+    # test_digits()
+    # test_capital_letters()
+    test_load_alphanumeric_with_fontfile()
     logging.info("All tests pass.")

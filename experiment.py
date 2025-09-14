@@ -6,9 +6,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from argparse import ArgumentParser
 from pca import MNISTPCA as PCA
+import os
+import re
 
 from mnist import datasets
 import logging
+from shutil import copyfile
+import json
 
 
 class AutoencoderExperiment(ABC):
@@ -21,17 +25,17 @@ class AutoencoderExperiment(ABC):
         """
         Initialize the AutoencoderExperiment.
         :param pca_dims:
-          if >=1, number of dimensions for PCA, 
-              =0, no pca (just scale normalization), 
-             < 1, fraction of variance
+          if >=1, number of dimensions for PCA,
+              =0, no pca (just scale normalization),
+             < 1, fraction of variance retained
         :param n_train_samples: Number of training samples to use (0 for all 60k).
         """
-        if dataset not in datasets:
-            raise ValueError("Dataset must be one of the following: %s" % list(datasets.keys()))
+        if dataset not in datasets and not (dataset.endswith('.json')):
+            raise ValueError("Dataset must be one of the following: %s" % list(datasets.keys() + ['<font_set.json>']))
         self.dataset = dataset
         self.whiten_input = whiten_input
         self.learning_rate = learning_rate
-        self.pca = PCA(dims=pca_dims, whiten=whiten_input, dataset=dataset)
+        self.pca = PCA(dims=pca_dims, whiten=whiten_input)
         self.code_size = d_latent
         self.batch_size = batch_size
         self.n_train_samples = n_train_samples
@@ -48,6 +52,12 @@ class AutoencoderExperiment(ABC):
             'learning_rate': []
         }
         self._init_model()
+
+    def get_dataset_name(self):
+        if self.dataset in datasets:
+            return self.dataset
+        elif self.dataset.endswith('.json'):
+            return "alphaNumeric-%if-%ic" % (self._n_fonts, self._n_chars)
 
     @abstractmethod
     def get_name(self):
@@ -113,7 +123,19 @@ class AutoencoderExperiment(ABC):
 
     @abstractmethod
     def save_weights(self, filename):
+        """
+        Save the model weights to a file.
+        Also save the font set info if it's being used.  Write it to <weights_filename>_fontset.json.
+        """
         pass
+
+    def _save_font_set_info(self, weights_filename):
+
+        if self.dataset.endswith('.json'):
+            # remove .weights.h5 suffix
+            fontset_path = "%s_fontset.json" % (os.path.splitext(os.path.splitext(weights_filename)[0])[0])
+            copyfile(self.dataset, fontset_path)
+            logging.info("Font set info saved to %s", fontset_path)
 
     @abstractmethod
     def load_weights(self,filename=None):
@@ -131,7 +153,7 @@ class AutoencoderExperiment(ABC):
         pass
 
     @abstractmethod
-    def run_staged_experiment(self, n_stages=10, n_epochs=25):
+    def run_staged_experiment(self, n_stages=1, n_epochs=25):
         """
         For each of the n_stages, train for n_epochs, plot intermediate results,
         save weights, and continue training.
@@ -162,7 +184,8 @@ class AutoencoderExperiment(ABC):
                             "    'digits' (MNIST, handwritten digits),"
                             "    'fashion' (Fashion-MNIST),"
                             "    'numeric' (Typeface-MNIST),"
-                            "    'alphanumeric' (94_character_TMNIST)")
+                            "    'alphanumeric' (94_character_TMNIST),"
+                            "    <font_set.json> (custom font set from TMNIST, output of cluster_font.py)")
         parser.add_argument('--pca_dims', type=float, default=25,
                             help="PCA-preprocessing:[=0, whitening, no pca] / [int>0, number of PCA dims] / [0<float<1, frac of variance to keep]")
         parser.add_argument('--whiten', action='store_true',
@@ -195,6 +218,8 @@ class AutoencoderExperiment(ABC):
         parsed = parser.parse_args()
 
         # Checks:
+
+        # Dropout layer
         if parsed.dropout_layer is not None:
             if parsed.dropout_rate == 0.0:
                 parser.error("Dropout rate must be > 0.0 if dropout layer is specified.")
@@ -205,10 +230,17 @@ class AutoencoderExperiment(ABC):
         else:
             parsed.dropout = None
 
+        # PCA dims
         if parsed.pca_dims == 0.0:
             parsed.pca_dims = 0
         elif parsed.pca_dims > 1.0:
             parsed.pca_dims = int(parsed.pca_dims)
+
+
+        # dataset
+        if parsed.dataset not in datasets:
+            if not os.path.exists(parsed.dataset) or not parsed.dataset.endswith('.json'):
+                parser.error("Dataset must be one of the following: %s, or a path to a custom font set json file." % list(datasets.keys()))
 
         return parsed
 
@@ -216,8 +248,14 @@ class AutoencoderExperiment(ABC):
         """
         return dimensionality of training data
         """
-
-        self.mnist_data = datasets[self.dataset]()
+        if self.dataset in datasets:
+            self.mnist_data = datasets[self.dataset]()
+        elif self.dataset.endswith('.json'):
+            logging.info("Loading from custom font-set file: %s", self.dataset)
+            self.mnist_data = datasets['alphanumeric'](font_file=self.dataset)
+            self._font_file = self.dataset
+            self._n_fonts = self.mnist_data.n_fonts
+            self._n_chars = self.mnist_data.n_chars
         self.x_train = self.mnist_data.x_train.reshape(-1, 28*28)
         self.x_test = self.mnist_data.x_test.reshape(-1, 28*28)
         self.y_train, self.y_test = self.mnist_data.y_train, self.mnist_data.y_test
@@ -246,3 +284,48 @@ class AutoencoderExperiment(ABC):
             plt.close(fig)
             logging.info("Figure saved to %s", filename)
             return filename
+
+
+
+
+
+def font_set_from_filename(weights_filename):
+    """
+    Extract the font set information from the weights filename.
+    """
+    has_fontset = re.search(r'alphaNumeric-(\d+)f-(\d+)c_', weights_filename)
+    if not has_fontset:
+        return None
+    n_fonts_filename, n_chars_filename = has_fontset.groups()
+    n_fonts_filename, n_chars_filename = int(n_fonts_filename), int(n_chars_filename)
+
+    def _check_fontset_file(fontset_file):
+
+        with open(fontset_file, 'r') as f:
+            fontset = json.load(f)
+
+        n_fonts = np.sum([len(font_info['font_names']) for font_info in fontset['clusters']])
+        logging.info("Fontset file %s has %i fonts", fontset_file, n_fonts)
+        if int(n_fonts) != n_fonts_filename:
+            raise ValueError("Fontset file %s has %i fonts, but weights filename indicates %i" %
+                             (fontset_file, n_fonts, n_fonts_filename))
+
+        # Not using subset in json file, so don't check.
+        # n_chars = len(fontset['char_set'])
+        # if int(n_chars) != n_chars_filename:
+        #     raise ValueError("Fontset file %s has %i characters, but weights filename indicates %i" % (fontset_file, n_chars, n_chars_filename))
+
+    # Weights filename can have 1 or 2 extensions, remove to find <weights>_fontset.json
+    file_root = os.path.splitext(weights_filename)[0]
+    fontset_path = "%s_fontset.json" % file_root
+
+    if os.path.exists(fontset_path):
+        _check_fontset_file(fontset_path)
+    else:
+        fontset_path = "%s_fontset.json" % os.path.splitext(file_root)[0]
+        if os.path.exists(fontset_path):
+            _check_fontset_file(fontset_path)
+        else:
+            logging.warning("Weights filename indicates font subset used, but couldn't find fontset file %s or %s",
+                            fontset_path, "%s.weights_fontset.json" % os.path.splitext(file_root)[0])
+    return fontset_path

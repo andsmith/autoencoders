@@ -11,7 +11,7 @@ import os
 from argparse import ArgumentParser
 from matplotlib.gridspec import GridSpec
 import json
-from experiment import AutoencoderExperiment
+from experiment import AutoencoderExperiment,  font_set_from_filename
 import re
 
 
@@ -69,7 +69,7 @@ class DenseExperiment(AutoencoderExperiment):
                                               ) if self.dec_layer_desc is not None else ""
         pca_str = self.pca.get_short_name()
         drop_str = "" if self.dropout is None else "_Drop(l=%i,r=%.2f)" % (self.dropout['layer'], self.dropout['rate'])
-        dataset_str = "%s%s" % (self.dataset, "-BIN" if self.binary_input else "")
+        dataset_str = "%s%s" % (self.get_dataset_name(), "-BIN" if self.binary_input else "")
 
         fname = ("%s_Dense(%s_units=%s%s%s)" %
                  (dataset_str, pca_str, desc_str, dec_desc_str, drop_str))
@@ -79,6 +79,8 @@ class DenseExperiment(AutoencoderExperiment):
 
         if file_ext == 'weights':
             fname += ".weights.h5"
+        elif file_ext == 'fontset':
+            fname += "_fontset.json"
         elif file_ext == 'image':
             fname += ".png"
         elif file_ext == 'history':
@@ -96,9 +98,9 @@ class DenseExperiment(AutoencoderExperiment):
         Parse the filename to extract experiment parameters.
         :returns: dict with network architecture parameters, can be passed as a set of arguments to DenseExperiment().
         """
-        print("\n%s\n" % filename)
+
         file = os.path.split(os.path.abspath(filename))[1]
-        kind_pattern = r'([a-z]+)[_\-]([a-zA-Z\-\_]+)'
+        kind_pattern = r'([^_]+)[_\-]([a-zA-Z\-\_]+)'  # dataset_Dense(...
 
         # internal structure is everything between outer parentheses
         int_start, int_end = file.find("("), len(file)-file[::-1].find(")")
@@ -121,6 +123,21 @@ class DenseExperiment(AutoencoderExperiment):
         dataset, dense = file_kind_match.groups()
         if dense != 'Dense':
             raise ValueError("Expected 'Dense' in dataset_model string, found: %s" % dense)
+        dataset_fontset_pattern = r"(digits|fashion|mnist|alphanumeric)-([\d]+f-[\d]+c)"
+        dataset_bare_pattern = r"(digits|fashion|mnist|alphanumeric)"
+        bare_match = re.search(dataset_bare_pattern, dataset.lower())
+        fontset_match = re.search(dataset_fontset_pattern, dataset.lower())
+        if fontset_match:
+            # Check for parallel fontset file.
+            fontset_filename = "%s_fontset.json" % (os.path.splitext(os.path.splitext((filename))[0])[0])
+            dataset = fontset_filename
+            if not os.path.exists(dataset):
+                raise FileNotFoundError("Fontset file referenced in weights filename ('%s'), but no fontset file found at that location:\n\t%s" % (
+                    fontset_filename, dataset))
+        elif bare_match:
+            dataset = bare_match.group(1)
+        else:
+            raise ValueError("No dataset match found in filename: %s, in prefix: %s" % (filename, prefix))
 
         pca_match = re.search(pca_vs_rest_pattern, internal)
         if not pca_match:
@@ -153,7 +170,7 @@ class DenseExperiment(AutoencoderExperiment):
                                 rate=float(dropout_match.group(2)))
         else:
             dropout_info = None
-
+        
         params = {
             'enc_layers': list(enc_layers[:-1]),
             'd_latent': enc_layers[-1],
@@ -190,7 +207,7 @@ class DenseExperiment(AutoencoderExperiment):
         decoder_layers = []
         decoder_layer_desc = self.dec_layer_desc[:
                                                  ] if self.dec_layer_desc is not None else self.enc_layer_desc[:-1][::-1]
-        print("---------------------------> ", decoder_layer_desc, self.dec_layer_desc)
+        #print("---------------------------> ", decoder_layer_desc, self.dec_layer_desc)
         decoder_layer_desc.append(self._d_out)  # add the input layer size for decoding
         for i, n_units in enumerate(decoder_layer_desc):
             if i == 0:
@@ -254,6 +271,7 @@ class DenseExperiment(AutoencoderExperiment):
         with open(os.path.join(path, hist), 'w') as f:
             json.dump(self._history_dict, f)
         logging.info("Training history saved to %s", os.path.join(path, hist))
+        self._save_font_set_info(filename)
 
     def load_weights(self, filename=None):
         self_filename = self.get_name(file_ext='weights')
@@ -284,9 +302,23 @@ class DenseExperiment(AutoencoderExperiment):
 
     @staticmethod
     def from_filename(filename):
+
         filename = os.path.abspath(filename)
         logging.info("Loading DenseExperiment from filename: %s", filename)
         params = DenseExperiment.parse_filename(filename)
+
+        # disambiguate cmd-line fontset and fontset associated with weights file
+        weights_font_filename = font_set_from_filename(filename)
+        param_font_filename = params['dataset'] if params['dataset'].endswith('.json') else None
+        if weights_font_filename is not None and param_font_filename is not None:
+            if weights_font_filename != param_font_filename:
+                logging.warning("Font set file in weights filename is different from that in parameters, using weights file's:\n\t%s\n\t%s",
+                                weights_font_filename, param_font_filename)
+                
+        if weights_font_filename is not None:
+            logging.info("Using font set file from weights filename: %s", weights_font_filename)
+            params['dataset'] = weights_font_filename
+
         network = DenseExperiment(**params)
         network.load_weights(filename)
         return network
@@ -471,6 +503,25 @@ def dense_demo():
                          d_latent=args.d_latent,
                          binary_input=args.binary_input,
                          batch_size=args.batch_size)
+    # If no font set is specified on the cmd line but one is associated with the weights file, it will have the wrong 
+    # data loaded so the DenseExperiment should be reloaded with the font set filename as the dataset.
+    filename = de.get_name(file_ext='weights')
+    fontset_filename = de.get_name(file_ext='fontset')
+    if not args.dataset.endswith('.json') and os.path.exists(fontset_filename):
+        logging.info("Reloading DenseExperiment with font set file associated with weights: %s", fontset_filename)
+        de = DenseExperiment(enc_layers=args.layers,
+                             dec_layers=args.dec_layers,
+                             pca_dims=args.pca_dims,
+                             whiten_input=args.whiten,
+                             learning_rate=args.learn_rate,
+                             dropout_info=args.dropout,
+                             dataset=fontset_filename,
+                             d_latent=args.d_latent,
+                             binary_input=args.binary_input,
+                             batch_size=args.batch_size)
+
+    # (If one isn't associated with the weights file but one is specified, one will will be created when the weights are saved.)
+
 
     de.run_staged_experiment(n_stages=args.stages,
                              n_epochs=args.epochs,

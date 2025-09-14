@@ -36,16 +36,30 @@ class NumericMNISTData(MNISTData):
 
 
 class AlphaNumericMNISTData(MNISTData):
-    def __init__(self, use_good_subset=True, test_train_split=0.15):
+    def __init__(self, use_good_subset=True, test_train_split=0.15, font_file=None):
+        """
+        Load the Alphanumeric MNIST data set
+        :param use_good_subset:  If True, only load a subset of the characters with good quality renderings
+        :param test_train_split:  Fraction of data to use for testing (0.0-1.0)
+        :param font_file: If not None, load data from the specified json font set file (output of cluster_font.py)
+
+
+        """
         subset = GOOD_CHAR_SET if use_good_subset else None
         (self.x_train, self.labels_train, self.font_names_train), (
-            self.x_test, self.labels_test, self.font_names_test) = load_alphanumeric(numeric_labels=False, w_names=True, subset=subset, test_train_split=test_train_split)
+            self.x_test, self.labels_test, self.font_names_test) = load_alphanumeric(numeric_labels=False, w_names=True,
+                                                                                     subset=subset, test_train_split=test_train_split,
+                                                                                     font_file=font_file)
         label_classes = sorted(list(set(self.labels_train) | set(self.labels_test)))
+        self.n_chars = len(label_classes)
+        self.n_fonts = len(set(self.font_names_train) | set(self.font_names_test))
         self.class_name_to_index = {name: i for i, name in enumerate(label_classes)}
         self.index_to_class_name = {i: name for i, name in enumerate(label_classes)}
         self.y_train = np.array([self.class_name_to_index[name] for name in self.labels_train])
         self.y_test = np.array([self.class_name_to_index[name] for name in self.labels_test])
         logging.info("AlphaNumeric loaded %i samples from %i classes", len(self.x_train), len(label_classes))
+        if font_file is not None:
+            logging.info("\tFont file: %s had %i fonts", font_file, self.n_fonts)
 
 
 datasets = {'digits': MNISTData,

@@ -120,15 +120,67 @@ This example shows that, with clusters selected as above, there are 539 typeface
   * DS-G (dataset of good chars): 27,489 images using the "Good" character set (51 characters)
   * DS-A (dataset of all chars): 50,666 images using all 94 characters.
 
-  When you have enough points, click the "Save" button.  This will create the file `font_set.json` that can be used as an input to auto encoder training scripts (`dense.py`, `vae.py`)  and the file `font_chars.png` showing the selected characters from all the selected typefaces.
+When you have enough points, click the "Save" button.  This will create the file `font_set.json` that can be used as an input to auto encoder training scripts (`dense.py`, `vae.py`)  and the file `font_chars.png` showing the selected characters from all the selected typefaces.
 
-  The internal structure of `font_set.json` is:
+The internal structure of `font_set.json` is:
+```
+{ "charset": [list of selected characters],
+  "clusters": [ {"font_names": [list of typeface names in the cluster]}]
+}
+```
+
+# Autoencoder Training - Learn Latent Representations
+[Autoencoders background info]
+## Dense Autoencoder
+[bagkround for this application.]
+```
+usage: vae.py [-h] [--dataset DATASET] [--pca_dims PCA_DIMS] [--whiten] [--dropout_layer DROPOUT_LAYER] [--batch_size BATCH_SIZE] [--d_latent D_LATENT] [--dropout_rate DROPOUT_RATE]
+              [--layers LAYERS [LAYERS ...]] [--epochs EPOCHS] [--stages STAGES] [--learn_rate LEARN_RATE] [--no_plot] [--dec_layers DEC_LAYERS [DEC_LAYERS ...]] [--binary_input] [--reg_lambda REG_LAMBDA]
+
+Train a variational autoencoder on MNIST data.
+
+options:
+  -h, --help            show this help message and exit
+  --dataset DATASET     Which dataset to use: 'digits' (MNIST, handwritten digits), 'fashion' (Fashion-MNIST), 'numeric' (Typeface-MNIST), 'alphanumeric' (94_character_TMNIST), <font_set.json> (custom font
+                        set from TMNIST, output of cluster_font.py)
+  --pca_dims PCA_DIMS   PCA-preprocessing:[=0, whitening, no pca] / [int>0, number of PCA dims] / [0<float<1, frac of variance to keep]
+  --whiten              If set, each PCA feature is z-scored, else will have its original distribution.
+  --dropout_layer DROPOUT_LAYER
+                        Which encoding layer uses dropout (index into --layers param, cannot be final/coding layer)
+  --batch_size BATCH_SIZE
+                        Batch size for training (Default 256)
+  --d_latent D_LATENT   Dimensionality of the latent space (default: 16)
+  --dropout_rate DROPOUT_RATE
+                        Dropout rate to apply after each dense layer (default: 0.0)
+  --layers LAYERS [LAYERS ...]
+                        List of encoder layer sizes (default, 1 layers: [64])
+  --epochs EPOCHS       Number of epochs to train each stage (default: 25)
+  --stages STAGES       Number of times to train for the number of epochs, generate plots between each (default: 1)
+  --learn_rate LEARN_RATE
+                        Learning rate for the optimizer (default: 1e-3)
+  --no_plot             If set, saves images instead of showing them interactively.
+  --dec_layers DEC_LAYERS [DEC_LAYERS ...]
+                        List of decoder layer sizes (default: None, encoding layers reversed)
+  --binary_input        If set, binarizes the input images (default: False)
+  --reg_lambda REG_LAMBDA
+                        Regularization parameter for VAE (default: 0.01)
+```
+*to be continued...*
+
+# 2D Embedding of Latent Representations
+
+Run the script `> python embed.py <weights_file>` to create a 2D embedding of the latent representations of the training set images.  This will create two files for each embedding method in the local `embeddings/` subdirectory:
+  * `<weights_file>.embed-<EMB_METHOD>.pkl` - the embedding, for use in the latent distribution explorer.
+  * `<weights_file>.embed-<EMB_METHOD>.pkl.map.png` - a large rendering of the embedding, with images drawn at their 2D locations.
+
+  The embedding methods are set in `embed.py::38`, currently:
   ```
-  { "charset": [list of selected characters],
-    "clusters": [ {"font_names": [list of typeface names in the cluster]}]
-  }
+  EMBEDDINGS = [PCAEmbedding, TSNEEmbedding, UMAPEmbedding]
   ```
 
-  # Autoencoder Training
-  
-  *to be continued...*
+  [ADD EXAMPLE IMAGES]
+
+
+  # Latent Distribution Explorer
+
+Run the script   `> python explore_latent.py <embedding_file>.pkl` to start the latent distribution explorer GUI:

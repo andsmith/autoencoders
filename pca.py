@@ -121,12 +121,8 @@ class PCA(object):
 
 class MNISTPCA(PCA):
     _WORKING_DIR = "PCA"
-    _DATASETS = ['digits', 'fashion', 'numeric', 'alphanumeric']
 
-    def __init__(self, dataset, *args, **kwargs):
-        self.dataset = dataset
-        if dataset not in self._DATASETS:
-            raise ValueError("Unknown dataset: %s" % dataset)
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         logging.info("%s initialized.", self.get_name())
 
@@ -149,7 +145,7 @@ class MNISTPCA(PCA):
         nt = self._n_train if n_train is None else n_train
         nt = "(untrained)" if nt is None else "%i" % nt
         nd = n_dims if n_dims is not None else self.d_out
-        return "%s_PCA(dim=%s_whiten=%s_n-train=%s)" % (self.dataset, nd, "T" if self.whiten else "F", nt)
+        return "PCA(dim=%s_whiten=%s_n-train=%s)" % (nd, "T" if self.whiten else "F", nt)
 
     def get_short_name(self):
         return "PCA(%s,%s)" % (self.d_out, ("W" if self.whiten else "UW"))

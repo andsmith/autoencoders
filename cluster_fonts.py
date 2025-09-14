@@ -547,7 +547,7 @@ class ResultsWindow(ClusterWindow):
         selection = []
         if self._assignments is None:
             return selection
-        #import ipdb; ipdb.set_trace()
+
         for ind, cluster in enumerate(self._clusters):
             # if ind==len(self._clusters)-1:
             label = self._cluster_labels[ind]
@@ -778,7 +778,7 @@ class DatasetWindow(StatusWindow):
                     'clusters': sel}
 
         image = self._draw_chars(sel)
-        import ipdb; ipdb.set_trace()
+
 
         with open(filename, 'w') as f:
             json.dump(out_data, f)
@@ -868,7 +868,7 @@ class FontClusterApp(object):
         # print("Test cluster fonts:", np.array(self.fonts_train)[test_mask])
         # END DEBUG
         logging.info("\tComplete, found %i clusters.", len(np.unique(self._assignments)))
-        #import ipdb; ipdb.set_trace()
+
         self.windows['results_window'].update_results(self._assignments, self._distances, self.train_vec_info)
         self.windows['dataset_window'].update_dataset()
 

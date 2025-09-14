@@ -28,25 +28,14 @@ import argparse
 from color_blit import draw_color_tiles_cython as draw_tiles
 # from load_ae import load_autoencoder
 from img_util import make_img as mnist_img
-from tests import load_mnist, load_fashion_mnist
-from load_typographyMNIST import load_alphanumeric, load_numeric
-from load_ae import load_autoencoder, get_ae_dir
+from load_ae import load_autoencoder, get_ae_dir, LOADERS
 import os
-import pickle
+import pickle,json
 import re
 
 from pca import PCA
 # Run on each of these:
 EMBEDDINGS = [PCAEmbedding, TSNEEmbedding, UMAPEmbedding]  # UMAPEmbedding, RandomProjectionEmbedding,
-LOADERS = {'digits': load_mnist,
-           'numeric': load_numeric,
-           'alphanumeric': lambda **kwargs: load_alphanumeric(**kwargs, numeric_labels=False, subset=['A', 'B', 'C', '1', '2', '3']),
-           'fashion': load_fashion_mnist}
-
-def _get_dataset(weights_filename):
-    # from start to first dash/underscore/less-than
-    dataset = re.match(r"^(.*?)[\-_<]", os.path.basename(weights_filename))
-    return dataset.group(1) if dataset else None
 
 class LatentRepEmbedder(object):
     _WORKING_DIR = "embeddings"
@@ -56,10 +45,9 @@ class LatentRepEmbedder(object):
         :param weights_filename: Path to the trained autoencoder weights file  (saved AutoencoderExperiment)
         :param map_size_wh: Size of the map to draw the embeddings on
         """
-        self._dataset = _get_dataset(weights_filename)
         self._weights_filename = weights_filename
-        self._autoencoder = load_autoencoder(self._weights_filename)
         self._type = embedder_class
+        self._autoencoder = load_autoencoder(self._weights_filename)
         self._images = self._autoencoder.x_train
         self._digits = self._autoencoder.y_train
         logging.info("Initializing Embedding of type: %s", self._type.__name__)

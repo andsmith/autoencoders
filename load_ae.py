@@ -4,9 +4,19 @@ import os
 import re
 import pprint
 import logging
+from tests import load_mnist, load_fashion_mnist
+from load_typographyMNIST import load_alphanumeric, load_numeric, GOOD_CHAR_SET
+import numpy as np
+import json
 
 AUTOENCODERS = {DenseExperiment.WORKING_DIR: DenseExperiment,
                 VAEExperiment.WORKING_DIR: VAEExperiment}
+
+LOADERS = {'digits': load_mnist,
+           'numeric': load_numeric,
+           'alphanumeric': lambda **kwargs: load_alphanumeric(**kwargs, numeric_labels=False, subset=GOOD_CHAR_SET),
+           'fashion': load_fashion_mnist}
+
 
 def get_outer_path(filename):
     full = os.path.abspath(filename)
@@ -15,6 +25,7 @@ def get_outer_path(filename):
 def load_autoencoder(weights_filename):
     """
     Load an autoencoder experiment by name.
+    return (autoencoder_experiment, dataset)
     """
     path = get_outer_path(weights_filename)
     experiment_class = AUTOENCODERS[path]
