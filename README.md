@@ -132,7 +132,41 @@ The internal structure of `font_set.json` is:
 # Autoencoder Training - Learn Latent Representations
 [Autoencoders background info]
 ## Dense Autoencoder
-[bagkround for this application.]
+[bagkround for MNIST.]
+
+```
+usage: dense.py [-h] [--dataset DATASET] [--pca_dims PCA_DIMS] [--whiten] [--dropout_layer DROPOUT_LAYER] [--batch_size BATCH_SIZE] [--d_latent D_LATENT] [--dropout_rate DROPOUT_RATE] [--layers LAYERS [LAYERS ...]] [--epochs EPOCHS] [--stages STAGES]
+                [--learn_rate LEARN_RATE] [--no_plot] [--dec_layers DEC_LAYERS [DEC_LAYERS ...]] [--binary_input]
+
+Train a dense autoencoder on MNIST data.
+
+options:
+  -h, --help            show this help message and exit
+  --dataset DATASET     Which dataset to use: 'digits' (MNIST, handwritten digits), 'fashion' (Fashion-MNIST), 'numeric' (Typeface-MNIST), 'alphanumeric' (94_character_TMNIST), <font_set.json> (custom font set from TMNIST, output of cluster_font.py)
+  --pca_dims PCA_DIMS   PCA-preprocessing:[=0, whitening, no pca] / [int>0, number of PCA dims] / [0<float<1, frac of variance to keep]
+  --whiten              If set, each PCA feature is z-scored, else will have its original distribution.
+  --dropout_layer DROPOUT_LAYER
+                        Which encoding layer uses dropout (index into --layers param, cannot be final/coding layer)
+  --batch_size BATCH_SIZE
+                        Batch size for training (Default 256)
+  --d_latent D_LATENT   Dimensionality of the latent space (default: 16)
+  --dropout_rate DROPOUT_RATE
+                        Dropout rate to apply after each dense layer (default: 0.0)
+  --layers LAYERS [LAYERS ...]
+                        List of encoder layer sizes (default, 0 layers: [])
+  --epochs EPOCHS       Number of epochs to train each stage (default: 25)
+  --stages STAGES       Number of times to train for the number of epochs, generate plots between each (default: 1)
+  --learn_rate LEARN_RATE
+                        Learning rate for the optimizer (default: 1e-3)
+  --no_plot             If set, saves images instead of showing them interactively.
+  --dec_layers DEC_LAYERS [DEC_LAYERS ...]
+                        List of decoder layer sizes (default: None, encoding layers reversed)
+  --binary_input        If set, binarizes the input images (default: False)
+```
+*to be continued...*
+
+## Variational Autoencoders 
+
 ```
 usage: vae.py [-h] [--dataset DATASET] [--pca_dims PCA_DIMS] [--whiten] [--dropout_layer DROPOUT_LAYER] [--batch_size BATCH_SIZE] [--d_latent D_LATENT] [--dropout_rate DROPOUT_RATE]
               [--layers LAYERS [LAYERS ...]] [--epochs EPOCHS] [--stages STAGES] [--learn_rate LEARN_RATE] [--no_plot] [--dec_layers DEC_LAYERS [DEC_LAYERS ...]] [--binary_input] [--reg_lambda REG_LAMBDA]
@@ -165,7 +199,7 @@ options:
   --reg_lambda REG_LAMBDA
                         Regularization parameter for VAE (default: 0.01)
 ```
-*to be continued...*
+
 
 # 2D Embedding of Latent Representations
 
