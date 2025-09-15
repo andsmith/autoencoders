@@ -281,8 +281,9 @@ class EmbedTester(object):
                             COLOR_SCHEME['a_output']: []}
         self._box_fill_seq = ['a_source', 'a_dest','a_input']
         colors = MPL_CYCLE_COLORS
+        # Use original (self.embedder._images_in) or reconstructed (self.embedder._images_out) images for display (TODO: swap via hotkey)
         self.epz = EmbeddingPanZoom(self.size, self.embedder._embedded_train_data,
-                                    self.embedder._images.reshape((-1, 28, 28)), self.embedder._digits, colors)
+                                    self.embedder._images_out.reshape((-1, 28, 28)), self.embedder._digits, colors)
         self.win_name = "Embedding Pan/Zoom test"
         cv2.namedWindow(self.win_name, cv2.WINDOW_NORMAL)
         #cv2.resizeWindow(self.win_name, self.size[0], self.size[1])
@@ -323,9 +324,9 @@ class EmbedTester(object):
         a_input_code = self.embedder._codes[self.samples[2]]
         a_output_code = a_input_code + (a_dest_code - a_source_code)
         # Perform analogy operation here
-        a_source_img = self.embedder._images[self.samples[0]]   
-        a_dest_img = self.embedder._images[self.samples[1]]
-        a_input_img = self.embedder._images[self.samples[2]]
+        a_source_img = self.embedder._images_in[self.samples[0]]   
+        a_dest_img = self.embedder._images_in[self.samples[1]]
+        a_input_img = self.embedder._images_in[self.samples[2]]
         a_output_img = self.embedder._autoencoder.decode_samples(a_output_code.reshape(1,-1))
         fig, ax = plt.subplots(2,2)
         ax = ax.flatten()
@@ -367,6 +368,9 @@ class EmbedTester(object):
 
             elif k & 0xFF == ord('c'):
                 self._pop_sample()
+            elif k & 0xFF == ord('s'):
+                # swap imput/reconstructed tiles
+                self.epz.swap_imgs()
 
     def _mouse_callback(self, event, x, y, flags, param):
         pos_px = np.array((x, y))

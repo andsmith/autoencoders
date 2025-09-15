@@ -16,8 +16,9 @@ from img_util import make_digit_mosaic, make_img, diff_img
 from latent_var_plots import LatentDigitDist
 import time
 import json
-from experiment import AutoencoderExperiment
+from experiment import AutoencoderExperiment,  font_set_from_filename
 from anneal import make_annealing_schedule
+
 
 class Encoder(nn.Module):
     def __init__(self, input_dim, hidden_dims, latent_dim, dropout_layer=None, dropout_rate=0.5):
@@ -93,7 +94,7 @@ class VAE(nn.Module):
     def loss_function(self, recon_y, y_batch, mu, log_var, return_terms=False):
         MSE = F.mse_loss(recon_y, y_batch, reduction='mean')
         # get negative log-likelihood loss to compare:
-        #MSE = F.binary_cross_entropy(recon_y, y_batch, reduction='mean')
+        # MSE = F.binary_cross_entropy(recon_y, y_batch, reduction='mean')
         KLD = -0.5 * torch.mean(1 + log_var - mu.pow(2) - log_var.exp())
         total_loss = (1-self.lambda_reg) * MSE + (self.lambda_reg) * KLD
         if return_terms:
@@ -146,7 +147,7 @@ class VAEExperiment(AutoencoderExperiment):
         self._d_in = pca_dims
         self._d_out = 28*28
         super().__init__(dataset=dataset, pca_dims=pca_dims, enc_layers=enc_layers, dec_layers=dec_layers, d_latent=d_latent, batch_size=batch_size,
-                         whiten_input=whiten_input, learning_rate=learn_rate,binary_input=binary_input, **kwargs)
+                         whiten_input=whiten_input, learning_rate=learn_rate, binary_input=binary_input, **kwargs)
         self._history_dict = {
             'loss': [],
             'mse': [],
@@ -166,13 +167,15 @@ class VAEExperiment(AutoencoderExperiment):
         decoder_str = "_Decoder-%s" % "-".join(map(str, self.dec_layer_desc)) if self.dec_layer_desc is not None else ""
         encoder_str = "_Encoder-%s" % "-".join(map(str, self.enc_layer_desc))
         dataset_str = "%s%s" % (self.get_dataset_name(), "-BIN" if self.binary_input else "")
-        root = ("%s_VAE-TORCH(%s%s%s%s_Dlatent=%i_RegLambda=%.4f)" %
-                (dataset_str, pca_str, encoder_str, drop_str, decoder_str, self.code_size, self.reg_lambda))
+        root = ("%s_VAE-TORCH(%s%s%s%s_Dlatent=%i)" %
+                (dataset_str, pca_str, encoder_str, drop_str, decoder_str, self.code_size))
         if suffix is not None:
             root = "%s_%s" % (root, suffix)
 
         if file_kind == 'weights':
             return os.path.join(VAEExperiment.WORKING_DIR, root + ".weights")
+        elif file_kind == 'fontset':
+            return os.path.join(VAEExperiment.WORKING_DIR, root + "_fontset.json")
         elif file_kind == 'image':
             return os.path.join(VAEExperiment.WORKING_DIR, root + ".image.png")
         elif file_kind == 'history':
@@ -182,8 +185,28 @@ class VAEExperiment(AutoencoderExperiment):
 
     @staticmethod
     def from_filename(filename):
-        
-        params = VAEExperiment.parse_filename( os.path.basename(filename))
+
+        import ipdb
+        ipdb.set_trace()
+
+        filename = os.path.abspath(filename)
+        logging.info("Loading VAEExperiment from filename: %s", filename)
+        params = VAEExperiment.parse_filename(filename)
+
+        # disambiguate cmd-line fontset and fontset associated with weights file
+        weights_font_filename = font_set_from_filename(filename)
+        param_font_filename = params['dataset'] if params['dataset'].endswith('.json') else None
+        if weights_font_filename is not None and param_font_filename is not None:
+            if weights_font_filename != param_font_filename:
+                logging.warning("Font set file in weights filename is different from that in parameters, using weights file's:\n\t%s\n\t%s",
+                                weights_font_filename, param_font_filename)
+
+        if weights_font_filename is not None:
+            logging.info("Using font set file from weights filename: %s", weights_font_filename)
+            params['dataset'] = weights_font_filename
+
+        params = VAEExperiment.parse_filename(os.path.basename(filename))
+        params['lambda_reg'] = 0.0  # not in the filename, set to default
         network = VAEExperiment(**params)
         network.load_weights(filename)
         return network
@@ -300,13 +323,15 @@ class VAEExperiment(AutoencoderExperiment):
         with open(hist_filename, 'w') as f:
             json.dump(self._history_dict, f)
         logging.info("Saved model history to %s", hist_filename)
+        self._save_font_set_info(filename)
 
     def load_weights(self, filename=None):
 
         filename = self.get_name(file_kind='weights') if filename is None else filename
         self.model.load_state_dict(torch.load(filename, map_location=self.device, weights_only=True))
         logging.info("Loaded model weights from %s", filename)
-        hist_filename = self.get_name(file_kind='history') if filename is None else "%s.history.pkl" % (os.path.splitext(filename)[0])
+        hist_filename = self.get_name(file_kind='history') if filename is None else "%s.history.pkl" % (
+            os.path.splitext(filename)[0])
         with open(hist_filename, 'r') as f:
             self._history_dict.update(json.load(f))
         logging.info("Loaded model history from %s", hist_filename)
@@ -342,7 +367,7 @@ class VAEExperiment(AutoencoderExperiment):
     def _plot_model(self):
         self._plot_encoding_errors(show_diffs=False)
         self._plot_encoding_errors(show_diffs=True)
-        
+
         self._plot_code_samples()
         self._plot_history()
         if not self._save_figs:
@@ -394,7 +419,6 @@ class VAEExperiment(AutoencoderExperiment):
         filename = self.get_name(file_kind='image', suffix='History')
         self._maybe_save_fig(fig, filename)
 
-
     def _plot_code_samples(self, n_samp=39):
         """
         TODO: Sort the code units by how likely they are to be useful in the encoding.
@@ -438,10 +462,10 @@ class VAEExperiment(AutoencoderExperiment):
             print(loc, scale)
             try:
                 d_bbox = unit_dists.render(blank, loc_xy=loc, scale=scale, orient='horizontal',
-                                        centered=False, show_axis=True, separation_px=1,
-                                        val_span=value_span,
-                                        thicknesses_px=[2, 2, 2, 2], alphas=[.2, .5, .5, 1],
-                                        digit_subset=digit_subset, colors=colors)
+                                           centered=False, show_axis=True, separation_px=1,
+                                           val_span=value_span,
+                                           thicknesses_px=[2, 2, 2, 2], alphas=[.2, .5, .5, 1],
+                                           digit_subset=digit_subset, colors=colors)
             except:
                 logging.info("OUT OF SPACE!")
                 break
@@ -460,7 +484,6 @@ class VAEExperiment(AutoencoderExperiment):
         suffix = "LatentDist_stage=%i" % (self._stage+1)
         filename = self.get_name(file_kind='image', suffix=suffix)
         self._maybe_save_fig(fig, filename)
-
 
     def _plot_encoding_errors(self, n_samp=39, show_diffs=False):
 
@@ -546,7 +569,7 @@ class VAEExperiment(AutoencoderExperiment):
         """
         print("\n%s\n" % filename)
         file = os.path.split(os.path.abspath(filename))[1]
-        dataset_pattern = r'([a-z]+)[_\-]([a-zA-Z\-\_]+)'
+        kind_pattern = r'([^_]+)[_\-]([a-zA-Z\-\_]+)'
 
         # internal structure is everything between outer parentheses
         int_start, int_end = file.find("("), len(file)-file[::-1].find(")")
@@ -562,14 +585,30 @@ class VAEExperiment(AutoencoderExperiment):
         # optional, same format, assumed reverse of encoder if not present, l=layer (of encoder unit, can't be final/code layer), r=rate.
         dec_pattern = r'Decoder-([0-9\-]+)'
         dropout_pattern = r'Drop\(l=(\d+),r=(\d\.?\d*)\)'
-        reg_lambda_pattern = r'RegLambda=(\d+\.\d+)'
         d_latent_pattern = r'Dlatent=(\d+)'
-        file_kind_match = re.search(dataset_pattern, prefix)
+
+        file_kind_match = re.search(kind_pattern, prefix)
         if not file_kind_match:
             raise ValueError("No dataset_model string found in filename: %s, in prefix: %s" % (filename, prefix))
         dataset, vae = file_kind_match.groups()
         if vae != 'VAE-TORCH':
             raise ValueError("Expected 'VAE-TORCH' in dataset_model string, found: %s" % vae)
+
+        dataset_fontset_pattern = r"(digits|fashion|mnist|alphanumeric)-([\d]+f-[\d]+c)"
+        dataset_bare_pattern = r"(digits|fashion|mnist|alphanumeric)"
+        bare_match = re.search(dataset_bare_pattern, dataset.lower())
+        fontset_match = re.search(dataset_fontset_pattern, dataset.lower())
+        if fontset_match:
+            # Check for parallel fontset file.
+            fontset_filename = "%s_fontset.json" % (os.path.splitext(os.path.splitext((filename))[0])[0])
+            dataset = fontset_filename
+            if not os.path.exists(dataset):
+                raise FileNotFoundError("Fontset file referenced in weights filename ('%s'), but no fontset file found at that location:\n\t%s" % (
+                    fontset_filename, dataset))
+        elif bare_match:
+            dataset = bare_match.group(1)
+        else:
+            raise ValueError("No dataset match found in filename: %s, in prefix: %s" % (filename, prefix))
 
         pca_match = re.search(pca_vs_rest_pattern, internal)
         if not pca_match:
@@ -595,19 +634,12 @@ class VAEExperiment(AutoencoderExperiment):
         else:
             dec_layers = enc_layers[::-1]  # reverse of encoder, minus code layer
             logging.info("No decoder layer found, using reverse of encoder: %s", dec_layers)
-            
 
         d_latent_match = re.search(d_latent_pattern, arch_desc)
         if d_latent_match:
             d_latent = int(d_latent_match.group(1))
         else:
             d_latent = None
-
-        reg_lambda_match = re.search(reg_lambda_pattern, arch_desc)
-        if reg_lambda_match:
-            reg_lambda = float(reg_lambda_match.group(1))
-        else:
-            reg_lambda = None
 
         dropout_match = re.search(dropout_pattern, arch_desc)
         if dropout_match:
@@ -619,7 +651,6 @@ class VAEExperiment(AutoencoderExperiment):
         params = {
             'enc_layers': list(enc_layers),
             'd_latent': d_latent,
-            'reg_lambda': reg_lambda,
             'pca_dims': 0 if dims == 784 else dims,
             'whiten_input': whiten,
             'dropout_info': dropout_info,
@@ -628,6 +659,8 @@ class VAEExperiment(AutoencoderExperiment):
         }
 
         return params
+
+
 def vae_demo():
     args = VAEExperiment.get_args("Train a variational autoencoder on MNIST data.",
                                   extra_args=[
@@ -647,6 +680,25 @@ def vae_demo():
         dataset=args.dataset,
         dropout_info=args.dropout,
     )
+    # If no font set is specified on the cmd line but one is associated with the weights file, it will have the wrong
+    # data loaded so the VAEExperiment should be reloaded with the font set filename as the dataset.
+
+    filename = ve.get_name(file_kind='weights')
+    fontset_filename = ve.get_name(file_kind='fontset')
+    if not args.dataset.endswith('.json') and os.path.exists(fontset_filename):
+        logging.info("Reloading VAEExperiment with font set file associated with weights: %s", fontset_filename)
+        ve = VAEExperiment(
+            batch_size=args.batch_size,
+            enc_layers=args.layers,
+            dec_layers=args.dec_layers,
+            d_latent=args.d_latent,
+            reg_lambda=args.reg_lambda,
+            pca_dims=args.pca_dims,
+            learn_rate=args.learn_rate,
+            binary_input=args.binary_input,
+            dataset=fontset_filename,
+            dropout_info=args.dropout)
+
     ve.run_staged_experiment(n_stages=args.stages, n_epochs=args.epochs, save_figs=args.no_plot)
 
 
