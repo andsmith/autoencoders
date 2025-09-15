@@ -48,13 +48,13 @@ class LatentRepEmbedder(object):
         self._weights_filename = weights_filename
         self._type = embedder_class
         self._autoencoder = load_autoencoder(self._weights_filename)
-        self._images = self._autoencoder.x_train
+        self._images_in = self._autoencoder.x_train
         self._digits = self._autoencoder.y_train
         logging.info("Initializing Embedding of type: %s", self._type.__name__)
         if not self.load():
 
             logging.info("Didn't find encoding, creating new one...")
-            self._codes = self._encode_data()
+            self._codes, self._images_out = self._encode_data()
             self._embedder, self._embedded_train_data = self._calc_embedding()
             self.save()
         
@@ -99,6 +99,7 @@ class LatentRepEmbedder(object):
         self._embedder = load_data['embedder']
         self._embedded_train_data = load_data['embedded_train_data']
         self._codes = load_data['codes']
+        self._images_out = self._autoencoder.decode_samples(self._codes)
         if self._codes.shape[0] != self._autoencoder.x_train.shape[0]:
             logging.warning("Loaded codes have %i samples, but autoencoder has %i training samples, ignoring loaded codes.", self._codes.shape[0], self._autoencoder.x_train.shape[0])
             return False
@@ -107,7 +108,8 @@ class LatentRepEmbedder(object):
     def _encode_data(self):
         logging.info("Encoding training set...")
         train_encoded = self._autoencoder.encode_samples(self._autoencoder.x_train_pca, raw=False)
-        return train_encoded
+        train_decoded = self._autoencoder.decode_samples(train_encoded)
+        return train_encoded, train_decoded
 
     def _calc_embedding(self):
         # Run the specified embedding on the encoder
@@ -122,7 +124,7 @@ class LatentRepEmbedder(object):
 
         sample = np.random.choice(self._codes.shape[0], sample_size,
                                   replace=False) if sample_size > 0 else np.arange(self._codes.shape[0])
-        images_gray = [(self._images[i, :]).reshape(28, 28) for i in sample]
+        images_gray = [(self._images_out[i, :]).reshape(28, 28) for i in sample]
         labels = self._digits[sample]
         colors = np.array((MPL_CYCLE_COLORS),dtype=np.uint8)
         map_size_wh = (4096, 4096)
@@ -233,7 +235,7 @@ class ImageEmbedder(LatentRepEmbedder):
 
     def _load_data(self, data):
         (self.x_train, self.y_train), (self.x_test, self.y_test) = data
-        self._images = self.x_train
+        self._images_in = self.x_train
         self._digits = self.y_train
 
     def _preprocess(self):
