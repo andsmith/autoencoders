@@ -99,7 +99,9 @@ class LatentRepEmbedder(object):
         self._embedder = load_data['embedder']
         self._embedded_train_data = load_data['embedded_train_data']
         self._codes = load_data['codes']
-        logging.info("Loaded embedding from %s", filename)
+        if self._codes.shape[0] != self._autoencoder.x_train.shape[0]:
+            logging.warning("Loaded codes have %i samples, but autoencoder has %i training samples, ignoring loaded codes.", self._codes.shape[0], self._autoencoder.x_train.shape[0])
+            return False
         return True
 
     def _encode_data(self):

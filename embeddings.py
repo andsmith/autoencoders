@@ -263,13 +263,12 @@ class TSNEEmbedding(Embedding):
     def _calc_embedding(self, points):
         logging.info("Calculating t-SNE embedding for %d points with perplexity %.2f" %
                      (points.shape[0], self.perplexity))
-        tsne = TSNE(n_components=2, perplexity=self.perplexity)
-        logging.info("\tFinished t-SNE embedding.")
-        pts_2d = tsne.fit_transform(points)
         logging.info("\tEmbedded training set.")
+        tsne = TSNE(n_components=2, perplexity=self.perplexity)
+        pts_2d = tsne.fit_transform(points)
+        logging.info("\tFinished t-SNE embedding.")
 
         return tsne, pts_2d
 
     def _embed_points(self, points):
         return self.tsne.transform(points)
-

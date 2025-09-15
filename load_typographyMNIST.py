@@ -19,7 +19,7 @@ CACHE_FILES = dict(numeric='TMNIST_Data.cache.npz',
 
 GOOD_CHAR_SET = subset = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F', 'G',
                           'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X',
-                          'Y', 'Z', '~', '@', '!', '#', '$', '%', '&', '{', '}', '[', ']', '(', ')', '|', '?']
+                          'Y', 'Z', '~', '#', '$', '%', '&', '?']
 
 
 def _load_and_filter_zipped_csv(filepath: str, label_filters: set = None):

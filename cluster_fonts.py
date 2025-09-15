@@ -120,7 +120,7 @@ class ControlWindow(ClusterWindow):
     _ALGORITHMS = [k for k in ALGS.keys()]
     _SIMGRAPHS = [k for k in SIM_GRAPHS.keys()]
 
-    _PARAM_RANGES = {'K': (2, 42),
+    _PARAM_RANGES = {'K': (2, 100),
                      'knn_k': (1, 30),
                      'PCA': (0, 784)}
 
@@ -579,7 +579,8 @@ class ResultsWindow(ClusterWindow):
 
         w, h = self._bbox['x'][1]-self._bbox['x'][0], self._bbox['y'][1]-self._bbox['y'][0]
         aspect = w/h if h > 0 else 1.0
-        image, bboxes, labels = make_assign_gallery(size=(w, h), n_max=200,
+        logging.info("--------->  ResultsWindow: redraw to %ix%i, aspect: %.2f", w, h, aspect)
+        image, bboxes, labels = make_assign_gallery(size=(w, h), n_max=300,
                                                     tiles=np.array(self._train_vec_info['disp_icons']),
                                                     distances=self._distances,
                                                     assignments=self._assignments,
@@ -644,6 +645,7 @@ class ResultsWindow(ClusterWindow):
         self._bbox = {'x': (left, right),
                       'y': (top, bottom)}
         self._aspect = width / height if height > 0 else 0
+        logging.info("--------->  ResultsWindow: resize to %ix%i, bbox: %s, aspect: %.2f", width, height, self._bbox, self._aspect  )
         if self._assignments is not None:
             self.redraw()
 
@@ -908,7 +910,7 @@ class FontClusterApp(object):
             raise ValueError("Unknown distance metric name: %s" % dist_metric_name)
 
         if alg == 'KMeans':
-            self.clust_alg = KMeansAlgorithm(k=k, distance_metric=dist_metric, n_init=1, max_iter=1000)
+            self.clust_alg = KMeansAlgorithm(k=k, distance_metric=dist_metric, n_init=3, max_iter=1000)
             self._sim_graph = None
             self.stats_artist = self.clust_alg
 

@@ -151,6 +151,8 @@ class KMeansAlgorithm(ClusteringAlgorithm):
         old_cluster_ids = None
         np.random.seed(self.random_state)
         for trial in range(self.n_init):
+            if verbose:
+                logging.info("\tStarting trial %i/%i...", trial + 1, self.n_init    )
             random_indices = np.random.choice(x.shape[0], self.k, replace=False)
             means = np.array([self._calc_mean(x[random_indices[i]].reshape(1, d)) for i in range(self.k)])
 
@@ -164,9 +166,9 @@ class KMeansAlgorithm(ClusteringAlgorithm):
                         logging.info("\t\tconverged in %i iterations (empty cluster)!!!!!!!!!!!!", iteration)
                     break
                 means = np.array([self._calc_mean(x[cluster_ids == i].reshape(counts[i], d)) for i in range(self.k)])
-                if iteration % 50 == 0 and verbose:
+                if   verbose:
                     logging.info("\t\titeration %i had %i cluster assignment changes.", iteration, n_changed)
-                    logging.info("\t\titeration %i, cluster sizes: %s", iteration, counts)
+                    #logging.info("\t\titeration %i, cluster sizes: %s", iteration, counts)
                 if n_changed == 0:
                     if verbose:
                         logging.info("\t\tconverged in %i iterations.", iteration)
@@ -178,7 +180,7 @@ class KMeansAlgorithm(ClusteringAlgorithm):
                 best_means = means
 
             if verbose:
-                logging.info("\ttrial %i/%i converged in %i iterations, loss: %.4f",
+                logging.info("\t\ttrial %i/%i converged in %i iterations, loss: %.4f",
                              trial + 1, self.n_init, iteration, loss)
         self.means = best_means
         self.loss = best_loss
