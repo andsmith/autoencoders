@@ -491,6 +491,8 @@ class VAEExperiment(AutoencoderExperiment):
 
         # turn off x-axis for all but bottom plots:
         for i in range(len(ax)-1):
+            if i==3 :
+                continue
             ax[i].set_xticklabels([])
             ax[i].grid(True)
 
