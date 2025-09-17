@@ -70,6 +70,7 @@ For each of the 2,990 typefaces, create a vector by concatenating a subset of th
 #### Control panel
 
 At the top of the control panel is a selectable list of available clustering algorithms.  Below it are sliders and buttons for its parameters.
+
 ![Control panel](assets/cluster_ctrl2.png)
 
 ##### Dimensionality Reduction using PCA
@@ -103,7 +104,7 @@ Click a cluster and drag the mouse up/down to increase/decrase its indicated fra
 
 
 
-This example shows eight clusters selected for inclusion in the training set (with the blue box and percentage indicated.)  Within each cluster, samples are sorted (from left to right then top to bottom) by their "distance" from the cluster center:
+This example shows nine clusters selected for inclusion in the training set (with the blue box and percentage indicated.)  Within each cluster, samples are sorted (from left to right then top to bottom) by their "distance" from the cluster center:
   * K-means:  Euclidean/Cosine distance from the cluster centroid
   * DBScan: Distance from the nearest core point, or 0 for the noise points
 * Spectral:  New points are assigned to the same cluster as their closest neighbor in the training set, distances are that neighbor's distance to the cluster centroid in eigenfeature space.
@@ -115,7 +116,7 @@ Below the clustering summary shows the projected dataset size, based on which cl
 
 ![Dataset size](assets/cluster_dataset.png)
 
-This example shows that, with clusters selected as above, there are 539 typefaces included, and the dataset will have:
+This example shows that, with the clusters selected, there are 539 typefaces included, and the dataset will have:
   * DS-S (dataset of selected chars): 2,156 images using the selected 4 characters "R, S, T, W"
   * DS-G (dataset of good chars): 27,489 images using the "Good" character set (51 characters)
   * DS-A (dataset of all chars): 50,666 images using all 94 characters.
@@ -198,13 +199,21 @@ options:
   --binary_input        If set, binarizes the input images (default: False)
   --reg_lambda REG_LAMBDA
                         Regularization parameter for VAE (default: 0.01)
-```
+  --anneal m_cycles, lead_frac, ramp_frac, beta_min, beta_max    (disables reg_lambda)  
+                        Annealing parameters: 
+                        - m_cycles = number of cycles for beta annealing.
+                        - beta_min = minimum beta value, 
+                        - beta_max = maximum beta value, 
+                        - lead_frac = For initial training at beta=beta_min, fraction of all training steps. 
+                        - ramp_frac = fraction of each cycle that is the linear increase portion, the rest held at beta_max. 
 
+```
+ N-cycles, frac_lead-in (fraction of epochs to train initially at beta_low, i.e. not cycling), frac_ramp (fraction of each cycle that is the linear increase from beta_low to beta high, the remaining steps are held at beta_high), beta_low, beta_high.
 
 # 2D Embedding of Latent Representations
 
 Run the script `> python embed.py <weights_file>` to create a 2D embedding of the latent representations of the training set images.  This will create two files for each embedding method in the local `embeddings/` subdirectory:
-  * `<weights_file>.embed-<EMB_METHOD>.pkl` - the embedding, for use in the latent distribution explorer.
+  * `<weights_file>.embed-<EMB_METHOD>.pkl` - the embedding, for use in the latent distribution explorer (next section).
   * `<weights_file>.embed-<EMB_METHOD>.pkl.map.png` - a large rendering of the embedding, with images drawn at their 2D locations.
 
   The embedding methods are set in `embed.py::38`, currently:

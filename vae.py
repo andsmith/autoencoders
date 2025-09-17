@@ -251,13 +251,15 @@ class VAEExperiment(AutoencoderExperiment):
         From paper: "Cyclical Annealing Schedule: A Simple Approach to Mitigating KL Vanishing."
 
 
-               ------       ------       ------       ------  <- beta_max
-              /     |      /     |      /     |      /     
-             /      |     /      |     /      |     /       
-        ____/       |____/       |____/       |____/         <- beta_min
-        lead_frac = Fraction of each cycle that is flat at zero
-        ramp_frac = fraction of non-flat part spent ramping up to beta_max.
-        m_cycles = 4.
+                 ___   ___   ___    <- beta_max
+                /  |  /  |  /      
+               /   | /   | /       
+        ______/    |/    |/         <- beta_min
+        [lead]      
+
+        lead_frac = Fraction of ALL cycles that is held at beta_min before cycles start, here .25
+        ramp_frac = fraction of each cycle that is the linear increase portion, here 0.5.
+        m_cycles = number of cycles to fit into the training, here 3.
 
         returns: list of lists of beta, indexing like [epoch_no][minibatch_no].
 
@@ -760,7 +762,11 @@ def vae_demo():
                                       dict(name='--reg_lambda', type=float, default=0.01,
                                            help='Regularization parameter for VAE (default: 0.01)'),
                                       dict(name='--anneal', type=float, nargs=5, default=None,
-                                           help='Annealing parameters (m_cycles, lead_frac, ramp_frac, beta_min, beta_max) for KLD weight.')
+                                           help="""Annealing parameters:  m_cycles, lead_frac, ramp_frac, beta_min, beta_max  (disables lambda reg),
+                        [beta_min = minimum beta value, beta_max = maximum beta value,
+                        lead_frac = For initial training at beta=beta_min, fraction of all training steps.
+                        ramp_frac = fraction of each cycle that is the linear increase portion, the rest held at beta_max.
+                        m_cycles = number of cycles for beta annealing.""")
                                   ])
     logging.info("Running VAE with args: %s", args)
     if args.anneal is not None:
