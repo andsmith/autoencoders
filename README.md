@@ -215,6 +215,40 @@ Run the script `> python embed.py <weights_file>` to create a 2D embedding of th
   [ADD EXAMPLE IMAGES]
 
 
-  # Latent Distribution Explorer
+# Latent Distribution Explorer
+
+The hallmark of good latent representations of VAEs is that they are smooth and continuous, so every point in the latent code space corresponds to a valid decoded image. This means that we can explore the latent space by interpolating between points and observing the resulting images, or extraploate beyond known points to see what new images can be generated.
+
+Compare the latent spaces of VAEs with regular autoencoders.  Are the latent spaces of regular autoencoders as smooth and continuous as those of VAEs?  Are output images always valid?
+
+
+
 
 Run the script   `> python explore_latent.py <embedding_file>.pkl` to start the latent distribution explorer GUI:
+
+![ADD "Latent Explorer GUI" IMAGE HERE](assets/explorer_full.png)
+
+Click the "Toggle experiment" button to switch between the two experiments described below.
+
+## Experiment 1: Interpolation between known points in the latent space
+
+Select two images and N intermediate images will be interpolated & decoded.  For images of the same class, this should always result in a valid image and the sequence should look like a gradual morph from one image to the other (e.g. a loopy 2 that flattens out and becomes a zig-zag 2).  For images of different classes, the intermediate images may be a valid blend of the two classes (e.g. boots and sandals), or may be an invalid image (e.g. a "digit" that is neither a 1 nor an 8).
+
+### Demo
+
+Select 10 "Source" images, then select one "target" image.  The N source images will be interpolated to the target image in 7 intermediate steps, and extrapolate beyond by 10% and 50%, producing 9 images per source image.  The results will be displayed in  a grid.  Click to change the target, or hit space to clear all sources & start over
+
+
+## Experiment 2:  Completing the analogy, vector arithmetic in latent space
+
+Given a *transformation* from image A to image B, apply the same transformation to image C to produce image D.  For example, if A is a tall & thin 2 and B is a short & wide 2, then selecting a tall & thin 9 for C should produce a short & wide 9 for D.
+
+### Demo
+
+Select 7  "C" images, then select one "A" image and one "B" image.  The transformation from A to B will be applied to each C image to produce a D image, and the results will be displayed in a grid.  Click to change A or B, or hit space to clear all Cs & start over.
+
+Hints:
+  * Select A and B to be in the same class (the same digit, letter, or garment) so the transformation is only of styles.   Apply it to images similar to A and see if the results are similar to B.
+  * Push "F" while the mouse is over a character to only display other characters in the same typeface. [For alphanumeric dataset (typeography-MNIST) only.]
+  * Push "C" while the mouse is over an image to only display other images of the same class (MNIST:  digits 0-9, Fashion:  garment type, Alphanumeric:  character class).
+

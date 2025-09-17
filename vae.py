@@ -100,7 +100,6 @@ class VAE(nn.Module):
         if return_terms:
             return total_loss, MSE, KLD
         return total_loss
-    
 
     def collapse_metric(self, mu, log_var, threshold=1e-2):
         """
@@ -111,7 +110,7 @@ class VAE(nn.Module):
         var_mu = mu.var(dim=0)   # variance across dataset per-dim
         active_mask = var_mu > threshold   # threshold e.g. 1e-2 or 1e-3 (tune)
         fraction_active = active_mask.float().mean()
-        return  fraction_active
+        return fraction_active
 
     def predict(self, x):
         self.eval()
@@ -169,7 +168,7 @@ class VAEExperiment(AutoencoderExperiment):
             'val-kld': [],
             'val-mse': [],
             'val-collapse': [],
-            'lambda': [],
+            'beta': [],
             'learn_rate': []
         }
         logging.info("Initialized VAEExperiment:  %s" % (self.get_name(),))
@@ -199,9 +198,6 @@ class VAEExperiment(AutoencoderExperiment):
 
     @staticmethod
     def from_filename(filename):
-
-        import ipdb
-        ipdb.set_trace()
 
         filename = os.path.abspath(filename)
         logging.info("Loading VAEExperiment from filename: %s", filename)
@@ -255,33 +251,38 @@ class VAEExperiment(AutoencoderExperiment):
         From paper: "Cyclical Annealing Schedule: A Simple Approach to Mitigating KL Vanishing."
 
 
-           ------   ------   ------   ------  <- beta_max
-          /     |  /     |  /     |  /     
-         /      | /      | /      | /       
-        /       |/       |/       |/         <- 0.0
-
-        ramp_frac = fraction of each cycle spent ramping up to beta_max.
+               ------       ------       ------       ------  <- beta_max
+              /     |      /     |      /     |      /     
+             /      |     /      |     /      |     /       
+        ____/       |____/       |____/       |____/         <- beta_min
+        lead_frac = Fraction of each cycle that is flat at zero
+        ramp_frac = fraction of non-flat part spent ramping up to beta_max.
         m_cycles = 4.
 
-        returns: list of lists of beta_max, indexing like [epoch_no][minibatch_no].
+        returns: list of lists of beta, indexing like [epoch_no][minibatch_no].
 
         """
         n_steps = n_epochs * n_batches
 
-        
         if self.anneal is None:
             cycles = np.ones(n_steps) * self.reg_lambda
         else:
+            beta_range = self.anneal['beta_range']
             period = n_steps // self.anneal['m_cycles']
-            n_ramp_steps = int(period * self.anneal['ramp_frac'])
-            n_flat_steps = period - n_ramp_steps
+            ramp_frac, lead_frac = self.anneal['ramp_frac'], self.anneal['lead_frac']
+            n_lead = int(period * lead_frac)
+            n_ramp_steps = int((period - n_lead) * ramp_frac)
+            n_flat_steps = period -n_lead - n_ramp_steps
+            logging.info("Beta annealing schedule: period %i steps, lead %i steps, ramp %i steps, flat %i steps" %
+                            (period, n_lead, n_ramp_steps, n_flat_steps))
             cycle = np.concatenate((
-                np.linspace(0.0, self.anneal['beta_max'], n_ramp_steps, endpoint=False),
-                np.ones(n_flat_steps) * self.anneal['beta_max']
+                np.ones(n_lead) * beta_range[0],
+                np.linspace(beta_range[0], beta_range[1], n_ramp_steps, endpoint=False),
+                np.ones(n_flat_steps) * beta_range[1]
             ))
 
             cycles = np.tile(cycle, self.anneal['m_cycles'])
-            cycles = np.concatenate((cycles, np.ones(n_steps - cycles.size) * self.anneal['beta_max']))
+            cycles = np.concatenate((cycles, np.ones(n_steps - cycles.size) *beta_range[1]))
 
         plt.plot(cycles)
         plt.title("Beta annealing schedule")
@@ -296,8 +297,6 @@ class VAEExperiment(AutoencoderExperiment):
             end = start + n_batches
             beta_schedule.append(cycles[start:end].tolist())
         return beta_schedule
-
-
 
     def train_more(self, epochs=25):
         x_train_tensor = torch.from_numpy(self.x_train_pca).float()
@@ -315,14 +314,18 @@ class VAEExperiment(AutoencoderExperiment):
 
         n_batches_per_epoch = len(train_loader)
         self._beta_schedule = self._calc_anneal_schedule(n_epochs=epochs, n_batches=n_batches_per_epoch)
-
+        
         for epoch in range(epochs):
+            self._epoch = epoch
+            betas = []
             t_start = time.perf_counter()
             self.model.train()
             train_losses = []
             train_loss_terms = {'kld': [], 'mse': [], 'collapse': []}
+            #print("Beta schedule for epoch %i:  %s" % (epoch, self._beta_schedule[self._epoch]))
             for i, (x_batch, y_batch) in enumerate(train_loader):
-                beta = self._beta_schedule[self._epoch][i]
+                beta = self._beta_schedule[epoch][i]
+                #print("Beta:", beta)
                 x_batch = x_batch.to(self.device)
                 y_batch = y_batch.to(self.device)
                 self.optimizer.zero_grad()
@@ -334,12 +337,13 @@ class VAEExperiment(AutoencoderExperiment):
                 loss.backward()
                 self.optimizer.step()
                 train_losses.append(loss.item())
+                betas.append(beta)
             avg_train_loss = np.mean(train_losses)
-
+            self._history_dict['beta'].append(betas)
             self._history_dict['loss'].append(avg_train_loss)
             self._history_dict['mse'].append(np.mean(train_loss_terms['mse']))
             self._history_dict['kld'].append(np.mean(train_loss_terms['kld']))
-            self._history_dict['collapse'].extend(train_loss_terms['collapse'])
+            self._history_dict['collapse'].extend((train_loss_terms['collapse']))
             self.model.eval()
             test_losses = []
             test_loss_terms = {'kld': [], 'mse': [], 'collapse': []}
@@ -359,7 +363,6 @@ class VAEExperiment(AutoencoderExperiment):
             self._history_dict['val-mse'].append(np.mean(test_loss_terms['mse']))
             self._history_dict['val-kld'].append(np.mean(test_loss_terms['kld']))
             self._history_dict['val-collapse'].append(np.mean(test_loss_terms['collapse']))
-            self._history_dict['lambda'].append(self.model.lambda_reg)
             self._history_dict['learn_rate'].append(self.learning_rate)
             print(f"Epoch {epoch+1}/{epochs} ({duration:.4f}s), " +
                   f"Training Loss: {avg_train_loss:.4f}," +
@@ -369,7 +372,8 @@ class VAEExperiment(AutoencoderExperiment):
                   f"Test Loss: {avg_test_loss:.4f}  " +
                   f"(MSE: {self._history_dict['val-mse'][-1]:.6f}, " +
                   f"KLD: {self._history_dict['val-kld'][-1]:.6f}, " +
-                  f"frac active: {self._history_dict['val-collapse'][-1]:.4f})")
+                  f"frac active: {self._history_dict['val-collapse'][-1]:.4f}), " +
+                  'beta_range: [%.4f, %.4f]' % (min(betas), max(betas)))
 
         self.save_weights()
 
@@ -470,13 +474,13 @@ class VAEExperiment(AutoencoderExperiment):
 
         # Collapse:
         x = np.linspace(0, len(self._history_dict['learn_rate'])-1, len(self._history_dict['collapse']))
-        ax[3].plot(x,self._history_dict['collapse'], label='Train Collapse')
+        ax[3].plot(x, self._history_dict['collapse'], label='Train Collapse')
         ax[3].plot(self._history_dict['val-collapse'], label='Validation Collapse')
         ax[3].set_title('Loss, Collapse-term history', fontsize=12)
         ax[3].legend()
 
         # beta
-        beta_schedule_flat = [b for epoch in self._beta_schedule for b in epoch]
+        beta_schedule_flat = [b for epoch in self._history_dict['beta'] for b in epoch]
         x = np.linspace(0, len(self._history_dict['learn_rate'])-1, len(beta_schedule_flat))
         ax[4].plot(x, beta_schedule_flat, label='Beta')
         ax[4].set_title('Beta history', fontsize=12)
@@ -491,7 +495,7 @@ class VAEExperiment(AutoencoderExperiment):
 
         # turn off x-axis for all but bottom plots:
         for i in range(len(ax)-1):
-            if i==3 :
+            if i == 3:
                 continue
             ax[i].set_xticklabels([])
             ax[i].grid(True)
@@ -755,12 +759,17 @@ def vae_demo():
                                   extra_args=[
                                       dict(name='--reg_lambda', type=float, default=0.01,
                                            help='Regularization parameter for VAE (default: 0.01)'),
-                                      dict(name='--anneal', type=float, nargs=3, default=None,
-                                           help='Annealing parameters (m_cycles, beta_max, ramp_frac) for KLD weight.')
+                                      dict(name='--anneal', type=float, nargs=5, default=None,
+                                           help='Annealing parameters (m_cycles, lead_frac, ramp_frac, beta_min, beta_max) for KLD weight.')
                                   ])
     logging.info("Running VAE with args: %s", args)
     if args.anneal is not None:
-        args.anneal = {'m_cycles': int(args.anneal[0]), 'beta_max': args.anneal[1], 'ramp_frac': args.anneal[2]}
+        args.anneal = {'m_cycles': int(args.anneal[0]),
+                       'lead_frac': args.anneal[1],
+                       'ramp_frac': args.anneal[2],
+                       'beta_range': (args.anneal[3], args.anneal[4])}
+        
+        print("Using annealing parameters: %s" % (args.anneal,))
     ve = VAEExperiment(
         batch_size=args.batch_size,
         enc_layers=args.layers,
