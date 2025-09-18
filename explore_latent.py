@@ -26,7 +26,7 @@ from mnist import MNISTData
 import time
 from enum import IntEnum
 from abc import ABC, abstractmethod
-from embedding_drawing import EmbedWindow
+from embedding_drawing import EmbeddingPanZoom
 from embed import LatentRepEmbedder
 from util import fit_spaced_intervals, draw_bbox
 from colors import COLORS, MPL_CYCLE_COLORS, COLOR_SCHEME
@@ -39,16 +39,97 @@ class ResultPanel(ABC):
     def __init__(self, bbox, app):
         self.bbox = bbox  # (x0, y0, x1, y1)
         self.app = app
+        self._info = self.app.EXPERIMENTS['interp']
+        self._fg = np.array(COLOR_SCHEME['fg'],dtype=np.uint8).reshape(1, 1, 3)
+        self._bkg = np.array(COLOR_SCHEME['bkg'],dtype=np.uint8).reshape(1, 1, 3)
         self._t0 = time.perf_counter()
-        self._calc_dims()
+        self._startup()
 
-    @abstractmethod
-    def _calc_dims(self):
-        pass
+    def _startup(self):
+        self._n_source_boxes, self._n_target_boxes = self._calc_dims()
+        self.reset_ui_state()
+
+        self._cur_box_ind = 0  # set by user keypress up/down to change individual interpolation sources
+
 
     @abstractmethod
     def render(self, frame):
         pass
+    
+    @abstractmethod
+    def _reset_ui_state(self):
+        # Custom reset for each experiment
+        pass
+
+    @abstractmethod
+    def _calc_dims(self):
+        """
+        Compute how many tiles we can fit across, vertical/horizontal spacing of each tile.
+        :RETURNS:
+            number of user-selectable source boxes,
+            number of user-selectable target boxes
+        """
+        pass
+
+    @abstractmethod
+    def _update_results(self, src_ind=None, tgt_ind=None):
+        """
+        Compute results for source index src_ind --> target_ind
+        :param src_ind: index of source box that was updated, or None if target box was updated
+        :param tgt_ind: index of target box that was updated, or None if source box was updated
+        """
+        pass
+
+    def reset_ui_state(self):
+        # common reset for all experiments
+        self._cur_box_ind = 0
+        self._source_indices = [None] * self._n_source_boxes  # indices into embedding for each interpolation source image
+        self._source_images = {}  # Key is index [0 - n_sources-1], values is image to display or None to show bbox
+        self._target_images = {}
+        self._target_indices= [None] * self._n_target_boxes  # index into embedding for target image
+
+        self._n_src_updates = 0
+        self._n_tgt_updates = 0
+
+        self._reset_ui_state()
+
+    def set_box_sample(self, sample_ind):
+        """
+        User clicked a sample image, set the current box to that sample.
+        :param sample_ind: index into embedding.autoencoder.[training data]
+        """
+
+        def _set_target(target_index):
+            if sample_ind == self._target_indices[target_index]:
+                return False
+            self._target_indices[target_index] = sample_ind
+            self._target_images[target_index] = self._make_train_image(sample_ind)
+            self._n_tgt_updates += 1
+            return True
+
+        def _set_source(source_index):
+            if self._source_indices[source_index] == sample_ind:
+                return None 
+            self._source_indices[source_index] = sample_ind
+            self._source_images[source_index] = self._make_train_image(sample_ind)
+            self._n_src_updates += 1
+            self._cur_box_ind += 1 # move to next box (or target(s) if done)
+            return source_index
+
+        if self._cur_box_ind >= self._n_source_boxes:
+            box_ind = self._cur_box_ind - self._n_source_boxes
+            update = _set_target(box_ind)  # only one target
+            src_update_ind = None
+            tgt_update_ind = box_ind
+        else:
+            update_ind = _set_source(self._cur_box_ind)
+            update = update_ind is not None
+            src_update_ind = update_ind
+            tgt_update_ind = None
+
+        if update:
+            self._update_results(src_ind=src_update_ind, tgt_ind=tgt_update_ind)
+
 
     def _render_box(self, frame, bbox, tile_img, box_color):
         if tile_img is None:
@@ -63,14 +144,15 @@ class ResultPanel(ABC):
     def _make_train_image(self, src_ind):
         if src_ind is None:
             return None
-        img = self.app.embedder.images_in[src_ind]
-        img = (img * 255).astype(np.uint8)
+
+        img = self.app.embedding.images_in[src_ind].reshape((28,28,1))
+        color_img = self._fg * img + self._bkg * (1.0 - img)
+        img = (color_img).astype(np.uint8)
         img = cv2.resize(img, (self._info['tile_size'], self._info['tile_size']), interpolation=cv2.INTER_NEAREST)
-        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         return img
 
 
-class InterpExterpResultPanel(ResultPanel):
+class InterpExtrapResultPanel(ResultPanel):
     """
     Result window, experiment 1:  Interpolations and Extrapolations
 
@@ -106,12 +188,15 @@ class InterpExterpResultPanel(ResultPanel):
 
 
     """
+    def _reset_ui_state(self):
+        
+        self._interp_images = {}  # key is col, value is {row: image}
+        self._extrap_images = {}  # key is col, value is {row: image}
 
     def _calc_dims(self):
         """
         Compute how many tiles we can fit across, vertical/horizontal spacing of each tile.
         """
-        self._info = self.app.EXPERIMENTS['interp']
         tile_s = self._info['tile_size']
         pad = self.app.LAYOUT['small_pad']
         indent = self.app.LAYOUT['outer_pad']
@@ -191,56 +276,11 @@ class InterpExterpResultPanel(ResultPanel):
                                'target': _make_cap_box(y_interp_locs[-1]),
                                'interp': [_make_cap_box(y_interval) for y_interval in y_interp_locs[1:-1]],
                                'extrap': [_make_cap_box(y_interval) for y_interval in y_extrap_bbox]}
-        self._reset_ui_state()
-
-    def _reset_ui_state(self):
-        """
-        """
-        self._cur_source = None  # set by user keypress up/down to change individual interpolation sources
-        self._source_indices = [None] * self.n_sources  # indices into embedding for each interpolation source image
-        self._source_images = {}  # Key is index [0 - n_sources-1], values is image to display or None to show bbox
-        self._target_image = None  # image to display or None to show bbox}
-        self._interp_images = {}  # key is col, value is {row: image}
-        self._extrap_images = {}  # key is col, value is {row: image}
-
-        self._target_ind = None  # index into embedding for target image
-        self._n_src_updates = 0
-
-    def set_source(self, src_ind):
-        if self._cur_source is not None:
-            if self._source_indices[self._cur_source] == src_ind:
-                return  # no change
-            update_a_ind = self._cur_source
-        else:
-            # find first empty
-            try:
-                update_a_ind = self._source_indices.index(None)
-            except ValueError:
-                update_a_ind = self._n_src_updates % self.n_sources
-
-        # clear existing interp/extrap images
-        if update_a_ind in self._interp_images:
-            del self._interp_images[update_a_ind]
-        if update_a_ind in self._extrap_images:
-            del self._extrap_images[update_a_ind]
-
-        self._source_indices[update_a_ind] = src_ind
-        self._source_images[update_a_ind] = self._make_train_image(update_a_ind)
-        self._n_src_updates += 1
-
-        if self._target_ind is not None:
-            self._update_results(src=update_a_ind, tgt=None)
-
-    def set_target(self, tgt_ind):
-        if tgt_ind == self._target_ind:
-            return
-        self._target_ind = tgt_ind
-        self._target_image = self._make_train_image(tgt_ind)
-        self._update_results(src=None, tgt=tgt_ind)
+        return self.n_sources, 1  # sources + target
 
     def _update_results(self, src_ind=None, tgt_ind=None):
         # Compute interpolations and extrapolations for source index src_ind --> target_ind
-
+        print("Update results for source ", src_ind, " target ", tgt_ind)
         pass
 
     def render(self, frame):
@@ -270,7 +310,8 @@ class InterpExterpResultPanel(ResultPanel):
             write_centered_caption(box, caption)
 
         for i in range(self.n_sources):
-            self._render_box(frame, self._tgt_boxes[i], self._target_image, COLOR_SCHEME['a_output'])
+            target_img = self._target_images.get(0, None) if 0 in self._target_images else None
+            self._render_box(frame, self._tgt_boxes[i], target_img,  COLOR_SCHEME['a_output'])
             self._render_box(frame, self._src_boxes[i], self._source_images.get(i, None), COLOR_SCHEME['a_source'])
             for j in range(len(self._interp_vals)):
                 interp_img = self._interp_imgs[i].get(j, None) if i in self._interp_images else None
@@ -356,7 +397,7 @@ class AnalogyResultPanel(ResultPanel):
         self.n_targets = 2
         self.n_analogies = len(self._analogy_bboxes)
         print(f"Can fit {n_cols} columns and {n_rows} rows, total {self.n_analogies} analogies")
-        self._reset_ui_state()
+        return self.n_analogies, 2
 
     def _do_analogy(self):
         a_source_code = self.app.embedder.latent_codes[self.samples[0]]
@@ -375,15 +416,15 @@ class AnalogyResultPanel(ResultPanel):
             box_a, box_b = a_box_pair
             self._render_box(frame, box_a, self._source_images.get(a_ind, None), COLOR_SCHEME['a_input'])
             self._render_box(frame, box_b, self._analogy_images.get(a_ind, None), COLOR_SCHEME['a_output'])
-    
+
         self._render_box(frame, self._target_bboxes[0], self._target_images[0], COLOR_SCHEME['a_source'])
         self._render_box(frame, self._target_bboxes[1], self._target_images[1], COLOR_SCHEME['a_dest'])
 
-    def _set_source(self, src_ind):
-        if self._cur_source is not None:
-            if self._source_indices[self._cur_source] == src_ind:
+    def set_box_sample(self, src_ind):
+        if self._cur_box_ind is not None:
+            if self._source_indices[self._cur_box_ind] == src_ind:
                 return  # no change
-            update_a_ind = self._cur_source
+            update_a_ind = self._cur_box_ind
         else:
             # find first empty
             try:
@@ -425,15 +466,7 @@ class AnalogyResultPanel(ResultPanel):
         pass
 
     def _reset_ui_state(self):
-
-        self._cur_source = None  # set by user keypress up/down to change individual interpolation sources
-
-        self._source_indices = [None] * self.n_analogies  # indices into embedding for each interpolation source image
-        self._source_images = {}  # Key is analogy index [0 - n_analogies-1], values is image to display or None to show bbox
         self._analogy_images = {}  # key is analogy index, value is image to display or None to show bbox
-        self._target_inds = [None, None]  # index into embedding for target image
-        self._target_images = [None, None]  # image to display or None to show bb
-        self._n_tgt_updates = 0
 
 
 class ExploreDims:
@@ -461,7 +494,7 @@ class ExploreDims:
                                'row_space': 10,
                                'n_targets': 2, }  # analogy A and B vector endpoints
                    }
-    embedder = LatentRepEmbedder.from_filename(sys.argv[1])  # DEBUG
+    # embedder = LatentRepEmbedder.from_filename(sys.argv[1])  # DEBUG, use for test_result_panel
 
 
 def test_result_panel(cls):
@@ -514,53 +547,84 @@ class Explore(ExploreDims):
     def __init__(self, embedding, win_size=(1900, 950)):
         self.embedding = embedding
         self.win_size = win_size
+        
+        
+        self._blank = np.zeros((win_size[1], win_size[0], 3), dtype=np.uint8)
+        self._blank[:] = COLORS['OFF_WHITE_RGB']
+
         x_div = int(self.LAYOUT['dims']['x_div_rel'] * win_size[0])
         self._embed_bbox = {'x': (0, x_div), 'y': (0, win_size[1])}
         self._results_bbox = {'x': (x_div, win_size[0]), 'y': (0, win_size[1])}
-        embed_size, result_size = (self._embed_bbox['x'][1] - self._embed_bbox['x'][0],
-                                   self._embed_bbox['y'][1] - self._embed_bbox['y'][0]), \
-            (self._results_bbox['x'][1] - self._results_bbox['x'][0],
-             self._results_bbox['y'][1] - self._results_bbox['y'][0])
-        images = self.embedding.images_in
-        labels = self.embedding.labels_in
-        self._render = EmbeddingPanZoom(embed_size, embedding, images, labels, MPL_CYCLE_COLORS)
+        embed_size=(self._embed_bbox['x'][1] - self._embed_bbox['x'][0],
+                                   self._embed_bbox['y'][1] - self._embed_bbox['y'][0])
 
-        #  Render these bounding boxes, indexed by color
-        self._boxes = {COLOR_SCHEME['a_source']: [],
-                       COLOR_SCHEME['a_dest']: [],
-                       COLOR_SCHEME['a_input']: [],
-                       COLOR_SCHEME['a_output']: []}
+        images = self.embedding.images_in.reshape(-1, 28, 28)
+        labels = self.embedding.labels_in
+        embed_pos_2d = self.embedding.embedded_latent
+        self.epz = EmbeddingPanZoom(embed_size, embed_pos_2d, images, labels, MPL_CYCLE_COLORS)
+
+        self._experiments = [InterpExtrapResultPanel(bbox=self._results_bbox, app=self),
+                             AnalogyResultPanel(bbox=self._results_bbox, app=self)]
+        self._cur_experiment = 0
 
         self.offset = np.zeros(2)
         self._win_name = "Embedding Viewer"
-        self.scale = 1.0
-        self.spread = 1.0
+
         self.timing_info = {'fps': 0,
                             'n_frames': 0,
                             't_start': time.perf_counter(),
                             't_update_interval_sec': 2.0}
 
-        self.mouse_info = {'clicked_pos': None,
-                           'button_held': None  # "left" or 'right'
-                           }
-        self._blank = np.zeros((win_size[1], win_size[0], 3), dtype=np.uint8)
+        # self.mouse_info = {'clicked_pos': None,
+        #                    'button_held': None  # "left" or 'right'
+        #                    }
+        cv2.namedWindow(self._win_name, cv2.WINDOW_NORMAL)
+        #cv2.resizeWindow(self._win_name, self.size[0], self.size[1])
+        cv2.setMouseCallback(self._win_name, self._mouse_callback)
+
+        
+
 
     def _get_bbox(self):
         center = np.array([0.5, 0.5]) + self.offset
         box_wh = np.array([0.5, 0.5]) / self.scale
         return {'x': (center[0] - box_wh[0], center[0] + box_wh[0]),
                 'y': (center[1] - box_wh[1], center[1] + box_wh[1])}
+    '''
+    def _check_window_size(self):
+        w, h= cv2.getWindowImageRect(self._win_name)[2:4]
+        if (w, h) != self.win_size:
+            self.win_size = (w, h)
+            self._blank = np.zeros((h, w, 3), dtype=np.uint8)
+            self._blank[:] = COLORS['OFF_WHITE_RGB']
+            x_div = int(self.LAYOUT['dims']['x_div_rel'] * w)
+            self._embed_bbox = {'x': (0, x_div), 'y': (0, h)}
+            self._results_bbox = {'x': (x_div, w), 'y': (0, h)}
+            embed_size = (self._embed_bbox['x'][1] - self._embed_bbox['x'][0],
+                                       self._embed_bbox['y'][1] - self._embed_bbox['y'][0])
+            self._render.set_size(embed_size) ???
+    '''
 
-    def start(self):
+    def run(self):
 
-        cv2.namedWindow(self._win_name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(self._win_name, *self.win_size)
-        cv2.setMouseCallback(self._win_name, self.mouse_callback)
+        # cv2.namedWindow(self._win_name, cv2.WINDOW_NORMAL)
+        # cv2.resizeWindow(self._win_name, *self.win_size)
+        # cv2.setMouseCallback(self._win_name, self.mouse_callback)
+
+        self._click_px = None
+        self._pan_offset = None
+        self._moused_over = None  # index into points
 
         while True:
+
+            #self._check_window_size()
             img = self._blank.copy()
-            self._render.render_embedding(img, self._get_bbox(), spread=self.spread)
-            cv2.imshow(self._win_name, img)
+            self._experiments[self._cur_experiment].render(img)
+            embed_img = self.epz.get_frame(self._pan_offset, moused_over=self._moused_over)
+            img[self._embed_bbox['y'][0]:self._embed_bbox['y'][0]+embed_img.shape[0],
+                self._embed_bbox['x'][0]:self._embed_bbox['x'][0]+embed_img.shape[1], :] = embed_img
+
+            cv2.imshow(self._win_name, img[:, :, ::-1])
             key = cv2.waitKey(1)
             if key == 27 or key == ord('q'):  # ESC key
                 break
@@ -570,6 +634,10 @@ class Explore(ExploreDims):
             elif key == ord('d'):  # decrease spread
                 self.spread /= 1.1
                 logging.info(f"Spread decreased to {self.spread}")
+            elif key == ord('e'):  # next experiment
+                self._cur_experiment = (self._cur_experiment + 1) % len(self._experiments)
+                self._experiments[self._cur_experiment].reset_ui_state()
+                logging.info(f"Experiment changed to {self._experiments[self._cur_experiment].__class__.__name__}")
 
             # Update timing information
             self.timing_info['n_frames'] += 1
@@ -582,31 +650,38 @@ class Explore(ExploreDims):
 
         cv2.destroyAllWindows()
 
-    def mouse_callback(self, event, x, y, flags, param):
-        if event == cv2.EVENT_MOUSEWHEEL:
-            if flags > 0:
-                self.scale *= 1.1
-            else:
-                self.scale /= 1.1
-            logging.info(f"Scale changed to {self.scale}")
+    def _set_sample(self, sample_ind):
+        self._experiments[self._cur_experiment].set_box_sample(sample_ind)
+
+    def _mouse_callback(self, event, x, y, flags, param):
+        pos_px = np.array((x, y))
         if event == cv2.EVENT_LBUTTONDOWN:
-            self.mouse_info['clicked_pos'] = (x, y)
-            self.mouse_info['button_held'] = 'left'
-        elif event == cv2.EVENT_RBUTTONDOWN:
-            self.mouse_info['clicked_pos'] = (x, y)
-            self.mouse_info['button_held'] = 'right'
+            self._click_px = pos_px
+            if self._moused_over is not None:
+                self._set_sample(self._moused_over)
+
+        elif event == cv2.EVENT_LBUTTONUP:
+            self._click_px = None
+            self.epz.pan_by(self._pan_offset)
+            self._pan_offset = None
+
         elif event == cv2.EVENT_MOUSEMOVE:
-            if self.mouse_info['button_held'] == 'left':
-                dx = (x - self.mouse_info['clicked_pos'][0]) / self.win_size[0]
-                dy = (y - self.mouse_info['clicked_pos'][1]) / self.win_size[1]
-                self.offset -= np.array([dx, dy]) / self.scale
-                self.mouse_info['clicked_pos'] = (x, y)
-        elif event == cv2.EVENT_LBUTTONUP or event == cv2.EVENT_RBUTTONUP:
-            self.mouse_info['button_held'] = None
-            self.mouse_info['clicked_pos'] = None
+            if self._click_px is not None:
+                self._pan_offset = pos_px - self._click_px
+                print("Panning by ", self._pan_offset)
+            else:
+                self._moused_over = self.epz.get_moused_over(pos_px)
+
+                print("Mouse moved, now over: ", self._moused_over)
+
+        elif event == cv2.EVENT_MOUSEWHEEL:
+            direction = int(np.sign(flags))
+            self.epz.zoom_at(direction, pos_px=pos_px)
+
 
 
 def run_app():
+
     if len(sys.argv) < 2:
         print("Usage: python explore_latent.py <embedding.pkl>")
         sys.exit(1)
@@ -617,6 +692,6 @@ def run_app():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    # run_app()  # Run the test function to verify the implementation
-    test_result_panel(InterpExterpResultPanel)
-    test_result_panel(AnalogyResultPanel)
+    run_app()  # Run the test function to verify the implementation
+    # test_result_panel(InterpExterpResultPanel)
+    # test_result_panel(AnalogyResultPanel)

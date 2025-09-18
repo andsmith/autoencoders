@@ -36,6 +36,7 @@ COLOR_SCHEME = {'mouseover': COLORS['NEON_GREEN'],
                 'a_output': COLORS['NEON_BLUE'],
                 'vector': COLORS['GREEN'],
                 'bkg': COLORS['OFF_WHITE_RGB'],
+                'fg': COLORS['DARK_NAVY_RGB'],
                 'text': COLORS['DARK_NAVY_RGB'], }
 
 
