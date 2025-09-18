@@ -1,37 +1,536 @@
 """
 main_app:
-+-------------------------------+-----------+
-| Embedding pan/zoom            |mouseover  |
-|  nothing selected:            |info area  |   
-|   -mouseover/select sam1 ,    |   [img]   |
-|   -then sam2 to form vector.  |           |
-|   -mouseover 3rd, complete    | disp ctrl |
-|    analogy, disp below.       | 0 1 2 3 4 |  <- char select/deselect
-+-------------------------------+           |
-|    Analogy display            | <density> |
-| [sam1]----------->[sam2]      +-----------+ <- selected sample, concept vector
-| [s3]->[a0]->[a1]->[a2]-->[a3] |           | <- Initial sample (s3), partial analogy interpolations (a0, a1),
-+-------------------------------+-----------+    full analogy (a2), and extrapolation (a3)
+
+
++-------------------------------+----------+
+| Embedding pan/zoom            | results  |
+|                               | window   |
+|                               | [exp 1]  |  <- change experiments button
+|                               |          |
+|                               |          | <- experiment buttons
+|                               |          | 
++-------------------------------+----------+
+
+    For panning/zooming around in embedded latent space.
+    For selecting samples for experiments.
+
+
 """
 
 import cv2
 import numpy as np
 import logging
-from embeddings import PassThroughEmbedding, PCAEmbedding, TSNEEmbedding, UMAPEmbedding
+import sys
+
 from mnist import MNISTData
 import time
 from enum import IntEnum
 from abc import ABC, abstractmethod
+from embedding_drawing import EmbedWindow
+from embed import LatentRepEmbedder
+from util import fit_spaced_intervals, draw_bbox
+from colors import COLORS, MPL_CYCLE_COLORS, COLOR_SCHEME
 
 
-from windows import EmbedWindow, InfoWindow, AnalogyWindow
+from abc import ABC, abstractmethod
 
 
+class ResultPanel(ABC):
+    def __init__(self, bbox, app):
+        self.bbox = bbox  # (x0, y0, x1, y1)
+        self.app = app
+        self._t0 = time.perf_counter()
+        self._calc_dims()
 
-class PanZoomEmbedding(object):
-    def __init__(self, embedding, win_size):
+    @abstractmethod
+    def _calc_dims(self):
+        pass
+
+    @abstractmethod
+    def render(self, frame):
+        pass
+
+    def _render_box(self, frame, bbox, tile_img, box_color):
+        if tile_img is None:
+            draw_bbox(frame, bbox, thickness=1, color=box_color, inside=True)
+        else:
+            ih, iw = tile_img.shape[0:2]
+            box_w, box_h = bbox['x'][1] - bbox['x'][0], bbox['y'][1] - bbox['y'][0]
+            if iw != box_w or ih != box_h:
+                raise ValueError(f"Image size {iw}x{ih} does not match box size {box_w}x{box_h}")
+            frame[bbox['y'][0]:bbox['y'][1], bbox['x'][0]:bbox['x'][1], :] = tile_img
+
+    def _make_train_image(self, src_ind):
+        if src_ind is None:
+            return None
+        img = self.app.embedder.images_in[src_ind]
+        img = (img * 255).astype(np.uint8)
+        img = cv2.resize(img, (self._info['tile_size'], self._info['tile_size']), interpolation=cv2.INTER_NEAREST)
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        return img
+
+
+class InterpExterpResultPanel(ResultPanel):
+    """
+    Result window, experiment 1:  Interpolations and Extrapolations
+
+        +------------------------------------------+
+        |                                          |
+        |   [src 1]   [src 2]   [src 3]   [src 4]  |  <- source images (t = 0.0)
+        |                                          |
+        |    [i11]     [i12]     [i13]     [i14]   |  t = 0.1
+        |                                          |
+        |    [i21]     [i22]     [i23]     [i24]   |  t = 0.2
+        |                                          |
+        |                   ...                    |  t = 0.3 - 0.8
+        |                                          |
+        |    [i91]     [i92]     [i93]     [i94]   |  t = 0.9
+        |                                          |
+        |    [tgt]     [tgt]     [tgt]     [tgt]   |  <- target image, all same (t = 1.0)
+        |                                          |
+        |    [e11]     [e12]     [e13]     [e14]   |  t = 1.1
+        |                                          |
+        |    [e21]     [e22]     [e23]     [e24]   |  t = 1.5
+        |                                          |
+        |    [e31]     [e32]     [e33]     [e34]   |  t = 2.0
+        |                                          |
+        |            [clear sources]               |
+        |                                          |
+        +------------------------------------------+
+
+        User selects N sources (N is shown as 4 here), and a single target.
+
+        For each source, we show interpolations between source and target 
+        (at intervals of 0.1) and extrapolations beyond the target and in 
+        the same direction (at 1.1, 1.5, 2.0 times the distance).
+
+
+    """
+
+    def _calc_dims(self):
+        """
+        Compute how many tiles we can fit across, vertical/horizontal spacing of each tile.
+        """
+        self._info = self.app.EXPERIMENTS['interp']
+        tile_s = self._info['tile_size']
+        pad = self.app.LAYOUT['small_pad']
+        indent = self.app.LAYOUT['outer_pad']
+        self._interp_vals = self._info['interp_factors']
+        self._extrap_vals = self._info['extrap_factors']
+
+        x_left_margin = self._info['left_margin_px']
+
+        top, bottom = self.bbox['y'][0] + indent, self.bbox['y'][1] - indent
+        left, right = self.bbox['x'][0] + indent + x_left_margin, self.bbox['x'][1] - indent
+        print("Result panel bbox", left, top, right, bottom)
+        h, w = bottom - top, right - left
+
+        n_across = (w + pad) // (tile_s + pad)
+        print("N across", n_across)
+
+        self.n_sources = n_across
+
+        across_x_intervals = fit_spaced_intervals((left, right), n_across, 0.0, min_spacing=pad, fill_extent=False)
+        assym_right = right - across_x_intervals[-1][-1]
+        assym_left = across_x_intervals[0][0] - left
+        diff = (assym_right - assym_left) // 2
+        across_x_intervals = [(axi[0] + diff, axi[1] + diff) for axi in across_x_intervals]
+
+        x_tile_locs = [(axi[0], axi[0] + tile_s) for axi in across_x_intervals]
+
+        # the linearly interpolated part is equally spaced
+        height_for_interp = int((bottom-top) * (len(self._interp_vals) /
+                                (len(self._interp_vals) + len(self._extrap_vals) + 1)))
+
+        interp_y_intervals = fit_spaced_intervals((top, top + height_for_interp),
+                                                  len(self._interp_vals) + 2,
+                                                  tile_s,
+                                                  min_spacing=pad,
+                                                  fill_extent=False)
+
+        def _make_box_row(y_interval):
+            return [{'x': x_span, 'y': y_interval} for x_span in x_tile_locs]
+
+        y_interp_locs = [(iyi[0], iyi[0] + tile_s) for iyi in interp_y_intervals]
+        self._src_boxes = _make_box_row(y_interp_locs[0])
+        interp_box_rows = [_make_box_row(y_interval) for y_interval in y_interp_locs[1:-1]]
+        self._interp_boxes = list(zip(*interp_box_rows))
+
+        interp_box_y_spacing = self._interp_boxes[0][1]['y'][0] - self._interp_boxes[0][0]['y'][1]
+        print(interp_box_y_spacing)
+
+        # the extrapolated part is more spaced out
+        y_top = y_interp_locs[-1][1] + interp_box_y_spacing
+        y_extrap_intervals = []
+
+        y_spacing = int((bottom - y_top - tile_s * len(self._extrap_vals)) / (len(self._extrap_vals) + .5))
+        for ev in self._extrap_vals:
+            y_extrap_intervals.append((y_top, y_top + tile_s))
+            y_top += tile_s + y_spacing
+        y_extrap_bbox = [(eyi[0], eyi[0] + tile_s) for eyi in y_extrap_intervals]
+
+        # rotate so first index is source 1, ...
+
+        self._tgt_boxes = _make_box_row(y_interp_locs[-1])
+        extrap_box_rows = [_make_box_row(y_interval) for y_interval in y_extrap_bbox]
+        self._extrap_boxes = list(zip(*extrap_box_rows))
+
+        box_left = self.bbox['x'][0] + indent
+        box_right = x_tile_locs[0][0] - pad
+        top = y_interp_locs[0][0]
+        bottom = y_extrap_bbox[-1][1]
+
+        self._caption_bbox = {'x': (box_left, box_right),
+                              'y': (top, bottom)}
+
+        def _make_cap_box(y_interp_loc):
+            return {'x': (box_left, box_right),
+                    'y': y_interp_loc}
+
+        self._caption_boxes = {'source': _make_cap_box(y_interp_locs[0]),
+                               'target': _make_cap_box(y_interp_locs[-1]),
+                               'interp': [_make_cap_box(y_interval) for y_interval in y_interp_locs[1:-1]],
+                               'extrap': [_make_cap_box(y_interval) for y_interval in y_extrap_bbox]}
+        self._reset_ui_state()
+
+    def _reset_ui_state(self):
+        """
+        """
+        self._cur_source = None  # set by user keypress up/down to change individual interpolation sources
+        self._source_indices = [None] * self.n_sources  # indices into embedding for each interpolation source image
+        self._source_images = {}  # Key is index [0 - n_sources-1], values is image to display or None to show bbox
+        self._target_image = None  # image to display or None to show bbox}
+        self._interp_images = {}  # key is col, value is {row: image}
+        self._extrap_images = {}  # key is col, value is {row: image}
+
+        self._target_ind = None  # index into embedding for target image
+        self._n_src_updates = 0
+
+    def set_source(self, src_ind):
+        if self._cur_source is not None:
+            if self._source_indices[self._cur_source] == src_ind:
+                return  # no change
+            update_a_ind = self._cur_source
+        else:
+            # find first empty
+            try:
+                update_a_ind = self._source_indices.index(None)
+            except ValueError:
+                update_a_ind = self._n_src_updates % self.n_sources
+
+        # clear existing interp/extrap images
+        if update_a_ind in self._interp_images:
+            del self._interp_images[update_a_ind]
+        if update_a_ind in self._extrap_images:
+            del self._extrap_images[update_a_ind]
+
+        self._source_indices[update_a_ind] = src_ind
+        self._source_images[update_a_ind] = self._make_train_image(update_a_ind)
+        self._n_src_updates += 1
+
+        if self._target_ind is not None:
+            self._update_results(src=update_a_ind, tgt=None)
+
+    def set_target(self, tgt_ind):
+        if tgt_ind == self._target_ind:
+            return
+        self._target_ind = tgt_ind
+        self._target_image = self._make_train_image(tgt_ind)
+        self._update_results(src=None, tgt=tgt_ind)
+
+    def _update_results(self, src_ind=None, tgt_ind=None):
+        # Compute interpolations and extrapolations for source index src_ind --> target_ind
+
+        pass
+
+    def render(self, frame):
+        """
+        Render the interpolation/extrapolation results.
+        """
+
+        def write_centered_caption(box, text, text_indent=5):
+            font = self.app.LAYOUT['font']
+            font_scale = 0.4
+            thickness = 1
+            text_size, _ = cv2.getTextSize(text, font, font_scale, thickness)
+            text_w, text_h = text_size
+            box_w, box_h = box['x'][1] - box['x'][0], box['y'][1] - box['y'][0]
+            text_x = box['x'][0] + (box_w - text_w) // 2 - text_indent
+            text_y = box['y'][0] + (box_h + text_h) // 2
+            cv2.putText(frame, text, (text_x, text_y), font, font_scale, COLOR_SCHEME['text'], thickness, cv2.LINE_AA)
+
+        # Captions in the right column
+        write_centered_caption(self._caption_boxes['source'], self._info['captions']['source'])
+        write_centered_caption(self._caption_boxes['target'], self._info['captions']['target'])
+        for i, box in enumerate(self._caption_boxes['interp']):
+            caption = self._info['captions']['interp'] % (self._interp_vals[i],)
+            write_centered_caption(box, caption)
+        for i, box in enumerate(self._caption_boxes['extrap']):
+            caption = self._info['captions']['extrap'] % (self._extrap_vals[i],)
+            write_centered_caption(box, caption)
+
+        for i in range(self.n_sources):
+            self._render_box(frame, self._tgt_boxes[i], self._target_image, COLOR_SCHEME['a_output'])
+            self._render_box(frame, self._src_boxes[i], self._source_images.get(i, None), COLOR_SCHEME['a_source'])
+            for j in range(len(self._interp_vals)):
+                interp_img = self._interp_imgs[i].get(j, None) if i in self._interp_images else None
+                self._render_box(frame, self._interp_boxes[i][j], interp_img, COLOR_SCHEME['a_dest'])
+            for j in range(len(self._extrap_vals)):
+                extrap_img = self._extrap_images[i].get(j, None) if i in self._extrap_images else None
+                self._render_box(frame, self._extrap_boxes[i][j], extrap_img, COLOR_SCHEME['a_input'])
+
+
+class AnalogyResultPanel(ResultPanel):
+    """
+    Experiment 2:  Analogies
+
+        +------------------------------------------------------+
+        |                                                      |
+        |                [Image A] : [Image B]                 |
+        |                                                      |
+        |  [Image C1] : [Image D1]    [Image C5] : [Image D5]  |
+        |                                                      |
+        |  [Image C2] : [Image D2]    [Image C6] : [Image D6]  |
+        |                                                      |
+        |  [Image C3] : [Image D3]    [Image C7] : [Image D7]  |
+        |                                                      |
+        |  [Image C4] : [Image D4]    [Image C8] : [Image D8]  |
+        |                                                      |
+        +------------------------------------------------------+
+
+        User select 8 "C" images for analogy completion, then selects
+        the "A" and "B" target images to define the analogy/transformation.
+
+        The completed analogies are shown in the "D" images.
+    """
+
+    def _calc_dims(self):
+        # How many columns can we fit given the padding and the size of 2 tiles for each analogy?
+        self._info = self.app.EXPERIMENTS['analogy']
+        tile_s = self._info['tile_size']
+        a_space = self._info['a_space']
+        col_space = self._info['col_space']
+        row_space = self._info['row_space']
+        indent = self.app.LAYOUT['outer_pad']
+
+        top, bottom = self.bbox['y'][0] + indent, self.bbox['y'][1] - indent
+        left, right = self.bbox['x'][0] + indent, self.bbox['x'][1] - indent
+
+        width, height = right - left, bottom - top
+
+        analogy_width = tile_s * 2 + a_space
+        n_cols = (width + col_space) // (analogy_width + col_space)
+        n_cols = max(1, n_cols)
+        n_rows = (height + row_space) // (tile_s + row_space)
+        n_rows = max(2, n_rows)
+
+        center_x = (left + right) // 2
+
+        target_x_interval = (center_x - analogy_width // 2, center_x - analogy_width // 2 + tile_s)  # at the top
+
+        across_x_intervals = fit_spaced_intervals(
+            (left, right), n_cols, 0.0, min_spacing=col_space, fill_extent=False)
+        across_y_intervals = fit_spaced_intervals(
+            (top, bottom), n_rows, 0.0, min_spacing=row_space, fill_extent=False)
+        if len(across_x_intervals) == 1:
+            # exactly under the target pair
+            across_x_intervals = [target_x_interval]
+            diff = 0
+        else:
+            # center it horizontally
+            assym_right = right - across_x_intervals[-1][-1]
+            assym_left = across_x_intervals[0][0] - left
+            diff = (assym_right - assym_left) // 2
+            print("Left extra: ", assym_left, "Right extra: ", assym_right, "Diff:", diff)
+
+        def _make_bbox_pair(x0, y0):
+            return [{'x': (x0, x0 + tile_s), 'y': (y0, y0 + tile_s)},
+                    {'x': (x0 + tile_s + a_space, x0 + 2*tile_s + a_space), 'y': (y0, y0 + tile_s)}]
+
+        self._target_bboxes = _make_bbox_pair(target_x_interval[0], top)
+        self._analogy_bboxes = []
+
+        for yi in across_y_intervals[1:]:
+            for xi in across_x_intervals:
+                self._analogy_bboxes.append(_make_bbox_pair(xi[0] + diff, yi[0]))
+        self.n_targets = 2
+        self.n_analogies = len(self._analogy_bboxes)
+        print(f"Can fit {n_cols} columns and {n_rows} rows, total {self.n_analogies} analogies")
+        self._reset_ui_state()
+
+    def _do_analogy(self):
+        a_source_code = self.app.embedder.latent_codes[self.samples[0]]
+        a_dest_code = self.app.embedder.latent_codes[self.samples[1]]
+        a_input_code = self.app.embedder.latent_codes[self.samples[2]]
+        a_output_code = a_input_code + (a_dest_code - a_source_code)
+        # Perform analogy operation here
+        a_source_img = self.app.embedder.images_in[self.samples[0]]
+        a_dest_img = self.app.embedder.images_in[self.samples[1]]
+        a_input_img = self.app.embedder.images_in[self.samples[2]]
+        a_output_img = self.app.embedder.autoencoder.decode_samples(a_output_code.reshape(1, -1))
+
+    def render(self, frame):
+
+        for a_ind, a_box_pair in enumerate(self._analogy_bboxes):
+            box_a, box_b = a_box_pair
+            self._render_box(frame, box_a, self._source_images.get(a_ind, None), COLOR_SCHEME['a_input'])
+            self._render_box(frame, box_b, self._analogy_images.get(a_ind, None), COLOR_SCHEME['a_output'])
+    
+        self._render_box(frame, self._target_bboxes[0], self._target_images[0], COLOR_SCHEME['a_source'])
+        self._render_box(frame, self._target_bboxes[1], self._target_images[1], COLOR_SCHEME['a_dest'])
+
+    def _set_source(self, src_ind):
+        if self._cur_source is not None:
+            if self._source_indices[self._cur_source] == src_ind:
+                return  # no change
+            update_a_ind = self._cur_source
+        else:
+            # find first empty
+            try:
+                update_a_ind = self._source_indices.index(None)
+            except ValueError:
+                update_a_ind = self._n_src_updates % self.n_analogies
+
+        self._source_indices[update_a_ind] = src_ind
+        self._source_images[update_a_ind] = self._make_train_image(update_a_ind)
+        self._n_src_updates += 1
+
+        if None not in self._target_inds:
+            self._update_results(src=update_a_ind, tgt=None)
+
+    def _set_target(self, tgt_ind):
+        if tgt_ind == self._target_inds[0] or tgt_ind == self._target_inds[1]:
+            return
+        if self._target_inds[0] is None:
+            self._target_inds[0] = tgt_ind
+        elif self._target_inds[1] is None:
+            self._target_inds[1] = tgt_ind
+        else:
+            # replace the older one
+            if self._n_tgt_updates % 2 == 0:
+                self._target_inds[0] = tgt_ind
+            else:
+                self._target_inds[1] = tgt_ind
+
+        self._n_tgt_updates += 1
+
+        self._target_images = [self._make_train_image(self._target_inds[0]),
+                               self._make_train_image(self._target_inds[1])]
+
+        if None not in self._target_inds:
+            self._update_results(src=None, tgt=tgt_ind)
+
+    def _update_results(self, src_ind=None, tgt_ind=None):
+        # Compute analogy results for all analogy source indices --> target_inds
+        pass
+
+    def _reset_ui_state(self):
+
+        self._cur_source = None  # set by user keypress up/down to change individual interpolation sources
+
+        self._source_indices = [None] * self.n_analogies  # indices into embedding for each interpolation source image
+        self._source_images = {}  # Key is analogy index [0 - n_analogies-1], values is image to display or None to show bbox
+        self._analogy_images = {}  # key is analogy index, value is image to display or None to show bbox
+        self._target_inds = [None, None]  # index into embedding for target image
+        self._target_images = [None, None]  # image to display or None to show bb
+        self._n_tgt_updates = 0
+
+
+class ExploreDims:
+
+    LAYOUT = {'dims': {'x_div_rel': 0.7},   # division between embedding and results
+              'small_pad': 6,     # between tiles in analogy display
+              'outer_pad': 20,
+              'font': cv2.FONT_HERSHEY_SIMPLEX, }
+
+    EXPERIMENTS = {'interp': {'name': "Interpolation / Extrapolation",
+                              'tile_size': 28*2,  # in results display
+                              'interp_factors': np.linspace(0.0, 1.0, 6 + 1).tolist()[1:-1],  # exclude 0.0 and 1.0
+                              'extrap_factors': [1.1, 1.5, 2.0],
+                              'left_margin_px': 50,   # print interpolation parameter (t=.3) in this column
+                              'captions': {'source': 'Source',
+                                           'target': 'Target',
+                                           'interp': 't=%.2f',
+                                           'extrap': 't=%.2f'},
+                              'n_targets': 1, },  # morph target
+
+                   'analogy': {'name': "Analogy Completion",
+                               'tile_size': 28*4,
+                               'a_space': 4,  # space between analogy pairs
+                               'col_space': 10,  # space between analogy columns
+                               'row_space': 10,
+                               'n_targets': 2, }  # analogy A and B vector endpoints
+                   }
+    embedder = LatentRepEmbedder.from_filename(sys.argv[1])  # DEBUG
+
+
+def test_result_panel(cls):
+    win_size = [(776, 950)]
+    x_div = int(.7 * win_size[0][0])
+    results_bbox = {'x': (x_div, win_size[0][0]), 'y': (0, win_size[0][1])}
+    panel = [cls(results_bbox, ExploreDims())]
+
+    img = [np.zeros((win_size[0][1], win_size[0][0], 3), dtype=np.uint8)]
+    img[0][:] = COLORS['OFF_WHITE_RGB']
+    cv2.namedWindow("test", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("test", *win_size[0])
+    n_frames = 0
+
+    def _check_win_size():
+        width, height = cv2.getWindowImageRect("test")[2:4]
+
+        if (width, height) != win_size[0]:
+            win_size[0] = (width, height)
+            img[0] = np.zeros((win_size[0][1], win_size[0][0], 3), dtype=np.uint8)
+            img[0][:] = COLORS['OFF_WHITE_RGB']
+            x_div = int(.7 * win_size[0][0])
+            bbox = {'x': (x_div, width), 'y': (0, height)}
+            print("Window resized to %i x %i, new bbox %s" % (width, height, str(bbox)))
+            return bbox
+
+        return None
+
+    while True:
+        frame = img[0].copy()
+        panel[0].render(frame)
+        bbox = _check_win_size()
+        if bbox is not None:
+            panel[0] = cls(bbox, ExploreDims())
+
+        cv2.imshow("test", frame[:, :, ::-1])
+        key = cv2.waitKey(10)
+        if key == 27 or key == ord('q'):  # ESC key
+            break
+        # Up/down to change bbox in UI
+        # elif key == ord('u'):  # up
+        n_frames += 1
+
+        # if n_frames % 10 == 0:
+        #     print(f"Rendered {n_frames} frames")
+
+
+class Explore(ExploreDims):
+
+    def __init__(self, embedding, win_size=(1900, 950)):
         self.embedding = embedding
         self.win_size = win_size
+        x_div = int(self.LAYOUT['dims']['x_div_rel'] * win_size[0])
+        self._embed_bbox = {'x': (0, x_div), 'y': (0, win_size[1])}
+        self._results_bbox = {'x': (x_div, win_size[0]), 'y': (0, win_size[1])}
+        embed_size, result_size = (self._embed_bbox['x'][1] - self._embed_bbox['x'][0],
+                                   self._embed_bbox['y'][1] - self._embed_bbox['y'][0]), \
+            (self._results_bbox['x'][1] - self._results_bbox['x'][0],
+             self._results_bbox['y'][1] - self._results_bbox['y'][0])
+        images = self.embedding.images_in
+        labels = self.embedding.labels_in
+        self._render = EmbeddingPanZoom(embed_size, embedding, images, labels, MPL_CYCLE_COLORS)
+
+        #  Render these bounding boxes, indexed by color
+        self._boxes = {COLOR_SCHEME['a_source']: [],
+                       COLOR_SCHEME['a_dest']: [],
+                       COLOR_SCHEME['a_input']: [],
+                       COLOR_SCHEME['a_output']: []}
+
         self.offset = np.zeros(2)
         self._win_name = "Embedding Viewer"
         self.scale = 1.0
@@ -45,7 +544,6 @@ class PanZoomEmbedding(object):
                            'button_held': None  # "left" or 'right'
                            }
         self._blank = np.zeros((win_size[1], win_size[0], 3), dtype=np.uint8)
-        self._render = MNISTEmbedRenderer(embedding)
 
     def _get_bbox(self):
         center = np.array([0.5, 0.5]) + self.offset
@@ -108,48 +606,17 @@ class PanZoomEmbedding(object):
             self.mouse_info['clicked_pos'] = None
 
 
-def test_get_bbox():
-    pze = PanZoomEmbedding(None, win_size=(800, 600))
-    import matplotlib.pyplot as plt
-
-    bbox_0 = pze._get_bbox()
-    pze.scale = 2.0
-    bbox_1 = pze._get_bbox()
-    pze.offset = (0.25, 0.25)
-    bbox_2 = pze._get_bbox()
-
-    def plot_box(ax, bbox, color, label):
-        x_range = bbox['x']
-        y_range = bbox['y']
-        box_coords = np.array([[x_range[0], y_range[0]],
-                               [x_range[1], y_range[0]],
-                               [x_range[1], y_range[1]],
-                               [x_range[0], y_range[1]],
-                               [x_range[0], y_range[0]]])
-        ax.plot(box_coords[:, 0], box_coords[:, 1], color=color, label=label)
-
-    fig, ax = plt.subplots()
-    plot_box(ax, bbox_0, color='r', label='original(unit)')
-    plot_box(ax, bbox_1, color='r', label='smaller')
-    plot_box(ax, bbox_2, color='g', label='moved and smaller')
-    plt.legend()
-    plt.ylim(-1, 2)
-    plt.xlim(-1, 2)
-    plt.show()
-
-
-def pan_zoom(n_sample=3000):
-    data = MNISTData()
-    sample_inds = np.random.choice(len(data.x_train), n_sample, replace=False)
-    x_train = data.x_train[sample_inds].reshape(n_sample, -1)
-    y_train = data.y_train[sample_inds]
-    labels = np.argmax(y_train, axis=1)
-    x_latent = x_train
-    embed = PCAEmbedding(x_latent, class_labels=labels, inputs=x_train)
-    pan_zoom_embed = PanZoomEmbedding(embed, win_size=(800, 600))
-    pan_zoom_embed.start()
+def run_app():
+    if len(sys.argv) < 2:
+        print("Usage: python explore_latent.py <embedding.pkl>")
+        sys.exit(1)
+    embedder = LatentRepEmbedder.from_filename(sys.argv[1])
+    explorer = Explore(embedder)
+    explorer.run()
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    pan_zoom()  # Run the test function to verify the implementation
+    # run_app()  # Run the test function to verify the implementation
+    test_result_panel(InterpExterpResultPanel)
+    test_result_panel(AnalogyResultPanel)

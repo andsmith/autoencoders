@@ -47,15 +47,15 @@ class LatentRepEmbedder(object):
         """
         self._weights_filename = weights_filename
         self._type = embedder_class
-        self._autoencoder = load_autoencoder(self._weights_filename)
-        self._images_in = self._autoencoder.x_train
-        self._digits = self._autoencoder.y_train
+        self.autoencoder = load_autoencoder(self._weights_filename)
+        self.images_in = self.autoencoder.x_train
+        self.labels_in = self.autoencoder.y_train
         logging.info("Initializing Embedding of type: %s", self._type.__name__)
         if not self.load():
 
             logging.info("Didn't find encoding, creating new one...")
-            self._codes, self._images_out = self._encode_data()
-            self._embedder, self._embedded_train_data = self._calc_embedding()
+            self.latent_codes, self.images_out = self._encode_data()
+            self.embedder, self.embedded_latent = self._calc_embedding()
             self.save()
         
 
@@ -82,9 +82,9 @@ class LatentRepEmbedder(object):
         filename = self.get_filename()
         if not os.path.exists(LatentRepEmbedder._WORKING_DIR):
             os.makedirs(LatentRepEmbedder._WORKING_DIR)
-        save_data = {'embedder': self._embedder,
-                     'embedded_train_data': self._embedded_train_data,
-                     'codes': self._codes}
+        save_data = {'embedder': self.embedder,
+                     'embedded_latent': self.embedded_latent,
+                     'latent_codes': self.latent_codes}
         with open(filename, 'wb') as f:
             pickle.dump(save_data, f)
         logging.info("Saved embedding to %s", filename)
@@ -96,40 +96,40 @@ class LatentRepEmbedder(object):
         logging.info("Loading embedding from %s ...", filename)
         with open(filename, 'rb') as f:
             load_data = pickle.load(f)
-        self._embedder = load_data['embedder']
-        self._embedded_train_data = load_data['embedded_train_data']
-        self._codes = load_data['codes']
-        self._images_out = self._autoencoder.decode_samples(self._codes)
-        if self._codes.shape[0] != self._autoencoder.x_train.shape[0]:
-            logging.warning("Loaded codes have %i samples, but autoencoder has %i training samples, ignoring loaded codes.", self._codes.shape[0], self._autoencoder.x_train.shape[0])
+        self.embedder = load_data['embedder']
+        self.embedded_latent = load_data['embedded_latent']
+        self.latent_codes = load_data['latent_codes']
+        self.images_out = self.autoencoder.decode_samples(self.latent_codes)
+        if self.latent_codes.shape[0] != self.autoencoder.x_train.shape[0]:
+            logging.warning("Loaded codes have %i samples, but autoencoder has %i training samples, ignoring loaded codes.", self.latent_codes.shape[0], self.autoencoder.x_train.shape[0])
             return False
         return True
 
     def _encode_data(self):
         logging.info("Encoding training set...")
-        train_encoded = self._autoencoder.encode_samples(self._autoencoder.x_train_pca, raw=False)
-        train_decoded = self._autoencoder.decode_samples(train_encoded)
+        train_encoded = self.autoencoder.encode_samples(self.autoencoder.x_train_pca, raw=False)
+        train_decoded = self.autoencoder.decode_samples(train_encoded)
         return train_encoded, train_decoded
 
     def _calc_embedding(self):
         # Run the specified embedding on the encoder
-        logging.info("Calculating %s embedding of %i codes, dim %i...", self._type.__name__, self._codes.shape[0], self._codes.shape[1])
+        logging.info("Calculating %s embedding of %i codes, dim %i...", self._type.__name__, self.latent_codes.shape[0], self.latent_codes.shape[1])
         embedder = self._type()
-        train_2d = embedder.fit_embed(self._codes)
+        train_2d = embedder.fit_embed(self.latent_codes)
         logging.info("Finished calculating embedding, data in range:  x:(%.4f, %.4f), y:(%.4f, %.4f)", train_2d[:, 0].min(), train_2d[:, 0].max(), train_2d[:, 1].min(), train_2d[:, 1].max())
         return embedder, train_2d
     
 
     def _draw_maps(self, sample_size=0, bkg_color=None):
 
-        sample = np.random.choice(self._codes.shape[0], sample_size,
-                                  replace=False) if sample_size > 0 else np.arange(self._codes.shape[0])
-        images_gray = [(self._images_out[i, :]).reshape(28, 28) for i in sample]
-        labels = self._digits[sample]
+        sample = np.random.choice(self.latent_codes.shape[0], sample_size,
+                                  replace=False) if sample_size > 0 else np.arange(self.latent_codes.shape[0])
+        images_gray = [(self.images_out[i, :]).reshape(28, 28) for i in sample]
+        labels = self.labels_in[sample]
         colors = np.array((MPL_CYCLE_COLORS),dtype=np.uint8)
         map_size_wh = (4096, 4096)
         images, bboxes = [], []
-        image_locs = self._embedded_train_data[sample]
+        image_locs = self.embedded_latent[sample]
 
         map_image_name = "%s.map.png" % ( self.get_filename(),)
         image_locs = image_locs[sample]
@@ -236,7 +236,7 @@ class ImageEmbedder(LatentRepEmbedder):
     def _load_data(self, data):
         (self.x_train, self.y_train), (self.x_test, self.y_test) = data
         self._images_in = self.x_train
-        self._digits = self.y_train
+        self._labels = self.y_train
 
     def _preprocess(self):
         if self._preproc is None:

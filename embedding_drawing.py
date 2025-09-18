@@ -264,7 +264,7 @@ class EmbeddingPanZoom(object):
         draw_bbox(frame, bbox, color=color, thickness=thickness, inside=False)
 
 
-class EmbedTester(object):
+class EmbedWindow(object):
     def __init__(self):
 
         self._size = 1920, 1000  # 500,500
@@ -279,11 +279,12 @@ class EmbedTester(object):
                             COLOR_SCHEME['a_dest']: [],
                             COLOR_SCHEME['a_input']: [],
                             COLOR_SCHEME['a_output']: []}
+
         self._box_fill_seq = ['a_source', 'a_dest','a_input']
         colors = MPL_CYCLE_COLORS
-        # Use original (self.embedder._images_in) or reconstructed (self.embedder._images_out) images for display (TODO: swap via hotkey)
-        self.epz = EmbeddingPanZoom(self.size, self.embedder._embedded_train_data,
-                                    self.embedder._images_out.reshape((-1, 28, 28)), self.embedder._digits, colors)
+
+        self.epz = EmbeddingPanZoom(self.size, self.embedder.embedded_latent,
+                                    self.embedder.images_out.reshape((-1, 28, 28)), self.embedder.labels_in, colors)  # switch to images_out to use reconstructions in gui (TODO: hotkey toggle)
         self.win_name = "Embedding Pan/Zoom test"
         cv2.namedWindow(self.win_name, cv2.WINDOW_NORMAL)
         #cv2.resizeWindow(self.win_name, self.size[0], self.size[1])
@@ -319,15 +320,15 @@ class EmbedTester(object):
             self.epz._frame = None  # force redraw
             
     def _do_analogy(self):
-        a_source_code = self.embedder._codes[self.samples[0]]
-        a_dest_code = self.embedder._codes[self.samples[1]]
-        a_input_code = self.embedder._codes[self.samples[2]]
+        a_source_code = self.embedder.latent_codes[self.samples[0]]
+        a_dest_code = self.embedder.latent_codes[self.samples[1]]
+        a_input_code = self.embedder.latent_codes[self.samples[2]]
         a_output_code = a_input_code + (a_dest_code - a_source_code)
         # Perform analogy operation here
-        a_source_img = self.embedder._images_in[self.samples[0]]   
-        a_dest_img = self.embedder._images_in[self.samples[1]]
-        a_input_img = self.embedder._images_in[self.samples[2]]
-        a_output_img = self.embedder._autoencoder.decode_samples(a_output_code.reshape(1,-1))
+        a_source_img = self.embedder.images_in[self.samples[0]]
+        a_dest_img = self.embedder.images_in[self.samples[1]]
+        a_input_img = self.embedder.images_in[self.samples[2]]
+        a_output_img = self.embedder.autoencoder.decode_samples(a_output_code.reshape(1,-1))
         fig, ax = plt.subplots(2,2)
         ax = ax.flatten()
 
@@ -421,4 +422,4 @@ def test_mouseover():
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     #test_mouseover()
-    EmbedTester().run()
+    EmbedWindow().run()

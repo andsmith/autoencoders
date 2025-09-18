@@ -30,10 +30,10 @@ MPL_CYCLE_COLORS = [(31, 119, 180),
 
 # analogy_source : analogy_dest :: analogy_input : analogy_output
 COLOR_SCHEME = {'mouseover': COLORS['NEON_GREEN'],
-                'a_source': COLORS['DARK_RED_RGB'],
-                'a_dest': COLORS['NEON_RED'],
+                'a_source': COLORS['NEON_RED'],
+                'a_dest': COLORS['DARK_RED_RGB'],
                 'a_input': COLORS['DARK_NAVY_RGB'],
-                'a_output': COLORS['SKY_BLUE'],
+                'a_output': COLORS['NEON_BLUE'],
                 'vector': COLORS['GREEN'],
                 'bkg': COLORS['OFF_WHITE_RGB'],
                 'text': COLORS['DARK_NAVY_RGB'], }

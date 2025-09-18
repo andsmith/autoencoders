@@ -1,6 +1,7 @@
 import pickle
 import cv2
 from flask import json
+from sympy import false
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -216,7 +217,6 @@ class VAEExperiment(AutoencoderExperiment):
             params['dataset'] = weights_font_filename
 
         params = VAEExperiment.parse_filename(os.path.basename(filename))
-        params['lambda_reg'] = 0.0  # not in the filename, set to default
         network = VAEExperiment(**params)
         network.load_weights(filename)
         return network
@@ -265,39 +265,38 @@ class VAEExperiment(AutoencoderExperiment):
 
         """
         n_steps = n_epochs * n_batches
-
+        
         if self.anneal is None:
-            cycles = np.ones(n_steps) * self.reg_lambda
+            schedule = np.ones(n_steps) * self.reg_lambda
         else:
             beta_range = self.anneal['beta_range']
-            period = n_steps // self.anneal['m_cycles']
-            ramp_frac, lead_frac = self.anneal['ramp_frac'], self.anneal['lead_frac']
-            n_lead = int(period * lead_frac)
-            n_ramp_steps = int((period - n_lead) * ramp_frac)
-            n_flat_steps = period -n_lead - n_ramp_steps
+            n_lead = int(n_steps * self.anneal['lead_frac'])
+            period = (n_steps - n_lead) // self.anneal['m_cycles']
+            n_ramp_steps = int(period * self.anneal['ramp_frac'])
+            n_flat_steps = period - n_ramp_steps
             logging.info("Beta annealing schedule: period %i steps, lead %i steps, ramp %i steps, flat %i steps" %
-                            (period, n_lead, n_ramp_steps, n_flat_steps))
+                         (period, n_lead, n_ramp_steps, n_flat_steps))
             cycle = np.concatenate((
-                np.ones(n_lead) * beta_range[0],
                 np.linspace(beta_range[0], beta_range[1], n_ramp_steps, endpoint=False),
                 np.ones(n_flat_steps) * beta_range[1]
             ))
-
+            lead = np.ones(n_lead) * beta_range[0]
             cycles = np.tile(cycle, self.anneal['m_cycles'])
-            cycles = np.concatenate((cycles, np.ones(n_steps - cycles.size) *beta_range[1]))
-
-        plt.plot(cycles)
-        plt.title("Beta annealing schedule")
-        plt.xlabel("Minibatch number")
-        plt.ylabel("Beta value")
-        plt.grid(True)
-        plt.show()
+            tail = np.ones(n_steps - cycles.size - lead.size) * beta_range[1]
+            schedule = np.concatenate((lead, cycles, tail))
+        if False:
+            plt.plot(schedule)
+            plt.title("Beta annealing schedule")
+            plt.xlabel("Minibatch number")
+            plt.ylabel("Beta value")
+            plt.grid(True)
+            plt.show()
         # break up into list of lists:
         beta_schedule = []
         for epoch in range(n_epochs):
             start = epoch * n_batches
             end = start + n_batches
-            beta_schedule.append(cycles[start:end].tolist())
+            beta_schedule.append(schedule[start:end].tolist())
         return beta_schedule
 
     def train_more(self, epochs=25):
@@ -316,7 +315,7 @@ class VAEExperiment(AutoencoderExperiment):
 
         n_batches_per_epoch = len(train_loader)
         self._beta_schedule = self._calc_anneal_schedule(n_epochs=epochs, n_batches=n_batches_per_epoch)
-        
+
         for epoch in range(epochs):
             self._epoch = epoch
             betas = []
@@ -324,10 +323,10 @@ class VAEExperiment(AutoencoderExperiment):
             self.model.train()
             train_losses = []
             train_loss_terms = {'kld': [], 'mse': [], 'collapse': []}
-            #print("Beta schedule for epoch %i:  %s" % (epoch, self._beta_schedule[self._epoch]))
+            # print("Beta schedule for epoch %i:  %s" % (epoch, self._beta_schedule[self._epoch]))
             for i, (x_batch, y_batch) in enumerate(train_loader):
                 beta = self._beta_schedule[epoch][i]
-                #print("Beta:", beta)
+                # print("Beta:", beta)
                 x_batch = x_batch.to(self.device)
                 y_batch = y_batch.to(self.device)
                 self.optimizer.zero_grad()
@@ -774,7 +773,7 @@ def vae_demo():
                        'lead_frac': args.anneal[1],
                        'ramp_frac': args.anneal[2],
                        'beta_range': (args.anneal[3], args.anneal[4])}
-        
+
         print("Using annealing parameters: %s" % (args.anneal,))
     ve = VAEExperiment(
         batch_size=args.batch_size,
