@@ -186,7 +186,7 @@ class ResultPanel(ABC):
         if src_ind is None:
             return None
 
-        img = self.app.embedding.images_in[src_ind].reshape((28, 28, 1))
+        img = self.app.epz.images_gray[src_ind].reshape((28, 28, 1))
         color_img = self._fg * img + self._bkg * (1.0 - img)
         img = (color_img).astype(np.uint8)
         img = cv2.resize(img, (self._info['tile_size'], self._info['tile_size']), interpolation=cv2.INTER_NEAREST)
@@ -331,10 +331,54 @@ class InterpExtrapResultPanel(ResultPanel):
                                'interp': [_make_cap_box(y_interval) for y_interval in y_interp_locs[1:-1]],
                                'extrap': [_make_cap_box(y_interval) for y_interval in y_extrap_bbox]}
         return src_boxes, tgt_boxes
+    
+    def  _interp_extrap(self, s_code, direction, t):
+        new_code = s_code + t * direction
+        new_img = self.app.embedding.autoencoder.decode_samples(new_code.reshape(1, -1))
+        new_img = new_img.reshape((28, 28, 1))
+        color_img = self._fg * new_img + self._bkg * (1.0 - new_img)
+        img = (color_img).astype(np.uint8)
+        img = cv2.resize(img, (self._info['tile_size'], self._info['tile_size']),
+                            interpolation=cv2.INTER_NEAREST)
+        return img
+
 
     def _update_results(self, src_ind=None, tgt_ind=None):
         # Compute interpolations and extrapolations for source index src_ind --> target_ind
         print("Recomputing interp/extrap for source ", src_ind, " target ", tgt_ind)
+        if src_ind is not None and self._target_indices[0] is not None:
+            
+            # recompute for this source
+            s_code = self.app.embedding.latent_codes[self._source_indices[src_ind]]
+            t_code = self.app.embedding.latent_codes[self._target_indices[0]]
+            direction = t_code - s_code
+            self._interp_images[src_ind] = {}
+            self._extrap_images[src_ind] = {}
+            for i, iv in enumerate(self._interp_vals):
+                img = self._interp_extrap(s_code, direction, iv)
+                self._interp_images[src_ind][i] = img
+            for i, ev in enumerate(self._extrap_vals):
+                img = self._interp_extrap(s_code, direction, ev)
+                self._extrap_images[src_ind][i] = img
+        elif tgt_ind is not None and not all([si is None for si in self._source_indices]):
+            #import ipdb; ipdb.set_trace()
+            # recompute for all sources
+            t_code = self.app.embedding.latent_codes[self._target_indices[0]]
+            for si in range(self.n_sources):
+                if self._source_indices[si] is None:
+                    continue
+                s_code = self.app.embedding.latent_codes[self._source_indices[si]]
+                direction = t_code - s_code
+                self._interp_images[si] = {}
+                self._extrap_images[si] = {}
+                for i, iv in enumerate(self._interp_vals):
+                    img = self._interp_extrap(s_code, direction, iv)
+                    self._interp_images[si][i] = img
+                for i, ev in enumerate(self._extrap_vals):
+                    img = self._interp_extrap(s_code, direction, ev)
+                    self._extrap_images[si][i] = img
+            self._n_src_updates = 0
+            self._n_tgt_updates = 0
         pass
 
     def _render(self, frame):
@@ -357,7 +401,7 @@ class InterpExtrapResultPanel(ResultPanel):
             self._render_box(frame, self._tgt_boxes[i], target_img,  COLOR_SCHEME['a_output'])
             self._render_box(frame, self._src_boxes[i], self._source_images.get(i, None), COLOR_SCHEME['a_source'])
             for j in range(len(self._interp_vals)):
-                interp_img = self._interp_imgs[i].get(j, None) if i in self._interp_images else None
+                interp_img = self._interp_images[i].get(j, None) if i in self._interp_images else None
                 self._render_box(frame, self._interp_boxes[i][j], interp_img, COLOR_SCHEME['a_dest'])
             for j in range(len(self._extrap_vals)):
                 extrap_img = self._extrap_images[i].get(j, None) if i in self._extrap_images else None
@@ -455,15 +499,15 @@ class AnalogyResultPanel(ResultPanel):
         return source_bboxes, target_bboxes
 
     def _do_analogy(self):
-        a_source_code = self.app.embedder.latent_codes[self.samples[0]]
-        a_dest_code = self.app.embedder.latent_codes[self.samples[1]]
-        a_input_code = self.app.embedder.latent_codes[self.samples[2]]
+        a_source_code = self.app.embedding.latent_codes[self.samples[0]]
+        a_dest_code = self.app.embedding.latent_codes[self.samples[1]]
+        a_input_code = self.app.embedding.latent_codes[self.samples[2]]
         a_output_code = a_input_code + (a_dest_code - a_source_code)
         # Perform analogy operation here
-        a_source_img = self.app.embedder.images_in[self.samples[0]]
-        a_dest_img = self.app.embedder.images_in[self.samples[1]]
-        a_input_img = self.app.embedder.images_in[self.samples[2]]
-        a_output_img = self.app.embedder.autoencoder.decode_samples(a_output_code.reshape(1, -1))
+        a_source_img = self.app.embedding.images_in[self.samples[0]]
+        a_dest_img = self.app.embedding.images_in[self.samples[1]]
+        a_input_img = self.app.embedding.images_in[self.samples[2]]
+        a_output_img = self.app.embedding.autoencoder.decode_samples(a_output_code.reshape(1, -1))
 
     def _render(self, frame):
 
@@ -487,14 +531,14 @@ class AnalogyResultPanel(ResultPanel):
 class ExploreDims:
 
     LAYOUT = {'dims': {'x_div_rel': 0.7, 'header_y_px': 70},   # division between embedding and results
-              'small_pad': 6,     # between tiles in analogy display
+              'small_pad': 10,     # between tiles in analogy display
               'outer_pad': 20,
 
               'font': cv2.FONT_HERSHEY_SIMPLEX, }
 
     EXPERIMENTS = {'interp': {'name': "Interpolation / Extrapolation",
-                              'tile_size': 28*3,  # in results display
-                              'interp_factors': np.linspace(0.0, 1.0, 6 + 1).tolist()[1:-1],  # exclude 0.0 and 1.0
+                              'tile_size': int(28*2.6),  # in results display
+                              'interp_factors': np.linspace(0.0, 1.0, 5 + 1).tolist()[1:-1],  # exclude 0.0 and 1.0
                               'extrap_factors': [1.1, 1.5, 2.0],
                               'left_margin_px': 50,   # print interpolation parameter (t=.3) in this column
                               'captions': {'source': 'Source',
@@ -573,7 +617,7 @@ class Explore(ExploreDims):
         embed_size = (self._embed_bbox['x'][1] - self._embed_bbox['x'][0],
                       self._embed_bbox['y'][1] - self._embed_bbox['y'][0])
 
-        images = self.embedding.images_in.reshape(-1, 28, 28)
+        images = self.embedding.images_out.reshape(-1, 28, 28)
         labels = self.embedding.labels_in
         embed_pos_2d = self.embedding.embedded_latent
         self.epz = EmbeddingPanZoom(embed_size, embed_pos_2d, images, labels, MPL_CYCLE_COLORS)
@@ -693,11 +737,11 @@ class Explore(ExploreDims):
         elif event == cv2.EVENT_MOUSEMOVE:
             if self._click_px is not None:
                 self._pan_offset = pos_px - self._click_px
-                print("Panning by ", self._pan_offset)
+                #print("Panning by ", self._pan_offset)
             else:
                 self._moused_over = self.epz.get_moused_over(pos_px)
 
-                print("Mouse moved, now over: ", self._moused_over)
+                #print("Mouse moved, now over: ", self._moused_over)
 
         elif event == cv2.EVENT_MOUSEWHEEL:
             direction = int(np.sign(flags))
